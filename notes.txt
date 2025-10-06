@@ -1,5 +1,18 @@
-1. we may need a ELO system to calculate player contribution ( this is gonna be complex)
-2. we need to run regression of sampled data vs game results (PCA on datapoints vs results)
-3. we need quarterly point results, bec garbage time
-4. we need quarterly player stats if possible (we can prob extract from play by play data)
-5. 
+date_id - An identifier for a single trading day.
+M* - Market Dynamics/Technical features.
+E* - Macro Economic features.
+I* - Interest Rate features.
+P* - Price/Valuation features.
+V* - Volatility features.
+S* - Sentiment features.
+MOM* - Momentum features.
+D* - Dummy/Binary features.
+forward_returns - The returns from buying the S&P 500 
+and selling it a day later. Train set only.
+
+risk_free_rate - The federal funds rate. Train set only.
+
+market_forward_excess_returns - Forward returns relative to expectations.
+ Computed by subtracting the rolling five-year mean forward returns and winsorizing 
+ the result using a median absolute deviation (MAD) with 
+ a criterion of 4. Train set only.
