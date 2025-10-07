@@ -16,3 +16,8 @@ market_forward_excess_returns - Forward returns relative to expectations.
  Computed by subtracting the rolling five-year mean forward returns and winsorizing 
  the result using a median absolute deviation (MAD) with 
  a criterion of 4. Train set only.
+
+
+
+dummy features have significant bias
+

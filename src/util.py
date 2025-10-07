@@ -233,7 +233,7 @@ def analyze_linear_relationships(df, target_col, k=5):
     
     return results_df
 
-def analyze_dummy_features(df_original, target_col, eps_movement=0.005):
+def analyze_dummy_features(df_original : pd.DataFrame, target_col : str, eps_movement=0.005):
     """
     Analyze ternary dummy features (0, 1, -1) against a ternary target variable.
     Shows percentage of exact agreement and partial patterns.
@@ -255,7 +255,6 @@ def analyze_dummy_features(df_original, target_col, eps_movement=0.005):
     df['target'] = np.where(df['target'] < -eps_movement, -1, df['target'])
 
     df['target'] = df['target'].astype(int)
-    print(df['target'])
 
     # Find all columns that start with 'D' followed by digits
     dummy_cols = [col for col in df.columns if col.startswith('D') and col[1:].isdigit()]
@@ -274,26 +273,26 @@ def analyze_dummy_features(df_original, target_col, eps_movement=0.005):
     results = []
     
     for col in dummy_cols:
-        # Calculate exact matches for each value
+
         both_positive = ((df[col] == 1) & (df['target'] == 1)).sum()
         both_zero = ((df[col] == 0) & (df['target'] == 0)).sum()
         both_negative = ((df[col] == -1) & (df['target'] == -1)).sum()
-        
+
         total_agreement = both_positive + both_zero + both_negative
-        
+        print("total_agreement:", total_agreement)
         # Calculate percentages
         total_records = len(df)
         agreement_pct = (total_agreement / total_records) * 100
         both_positive_pct = (both_positive / total_records) * 100
         both_zero_pct = (both_zero / total_records) * 100
         both_negative_pct = (both_negative / total_records) * 100
-        
+
         # Calculate disagreement
         disagreement = total_records - total_agreement
         disagreement_pct = (disagreement / total_records) * 100
         
         # Additional insights: same sign (both positive or both negative)
-        same_sign = both_positive + both_negative
+        same_sign = both_positive + both_negative + both_zero
         same_sign_pct = (same_sign / total_records) * 100
         
         results.append({
@@ -303,7 +302,7 @@ def analyze_dummy_features(df_original, target_col, eps_movement=0.005):
             'Both 0 %': both_zero_pct,
             'Both -1 %': both_negative_pct,
             'Same Sign %': same_sign_pct,
-            'Disagreement %': disagreement_pct
+            'Disagreement %': disagreement_pct,
         })
         
         print(f"\n{col}:")
@@ -313,7 +312,9 @@ def analyze_dummy_features(df_original, target_col, eps_movement=0.005):
         print(f"    - Both -1:         {both_negative_pct:6.2f}% ({both_negative}/{total_records})")
         print(f"  Same Sign (+1/-1):   {same_sign_pct:6.2f}% ({same_sign}/{total_records})")
         print(f"  Disagreement:        {disagreement_pct:6.2f}% ({disagreement}/{total_records})")
-    
+        print(f" Total Records:        {total_records}")
+        print(f" Total Non zero records: {((df[col] != 0).sum())} ({((df[col] != 0).sum()/total_records)*100:.2f}%)")
+
     print("\n" + "=" * 80)
     print("\nSUMMARY - Sorted by Agreement %:")
     print("-" * 80)
@@ -327,3 +328,18 @@ def analyze_dummy_features(df_original, target_col, eps_movement=0.005):
 
 # Example usage:
 # results = analyze_dummy_features(df, 'target')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
