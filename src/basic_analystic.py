@@ -106,7 +106,12 @@ for col in ["market_forward_excess_returns", "market_forward_excess_return"]:
 for col in df.columns:
     print(pd.isna(df[col]).sum())
 
-eps_movement = 0.02
+eps_movement = 0.01
+
+
+'''df = preprocess_data(df, remove_mode='extremes', percentile=47.5, normalize=True)
+analyze_linear_relationships(df, 'target', k=15)'''
+
 
 analyze_dummy_features(df, 'target', eps_movement=eps_movement)
 

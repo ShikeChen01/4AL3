@@ -9,6 +9,7 @@ from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import pearsonr
 import warnings
+import re
 
 def load_data(path: str | Path, target='forward_returns') -> pd.DataFrame:
     """
@@ -233,113 +234,99 @@ def analyze_linear_relationships(df, target_col, k=5):
     
     return results_df
 
-def analyze_dummy_features(df_original : pd.DataFrame, target_col : str, eps_movement=0.005):
+def analyze_dummy_features(
+    df_original: pd.DataFrame,
+    target_col: str,
+    eps_movement: float = 0.005,
+    dummy_prefix: str = r"D"
+) -> pd.DataFrame:
     """
-    Analyze ternary dummy features (0, 1, -1) against a ternary target variable.
-    Shows percentage of exact agreement and partial patterns.
-    
-    Parameters:
-    -----------
-    df_original : pandas.DataFrame
-        The dataframe containing dummy features and target
-    target_col : str
-        The name of the target column (should be continuous, will be converted to -1, 0, 1)
+    Compare ternary dummy features (values in {-1,0,1}) against a ternary target.
+    Prints per-feature stats and returns a sorted DataFrame of results.
     """
-
     df = df_original.copy()
 
-    # Convert target to -1, 0, 1
-    df['target'] = np.where(abs(df[target_col]) <= eps_movement, 0, df[target_col])
+    # --- 1) Robust target binning: -1 / 0 / +1 in a single vectorized step
+    v = df[target_col].to_numpy()
+    tgt = np.where(v >  eps_movement,  1,
+          np.where(v < -eps_movement, -1, 0)).astype(np.int8)
+    df["_tgt"] = tgt
 
-    df['target'] = np.where(df['target'] > eps_movement, 1, df['target'])
-    df['target'] = np.where(df['target'] < -eps_movement, -1, df['target'])
-
-    df['target'] = df['target'].astype(int)
-
-    # Find all columns that start with 'D' followed by digits
-    dummy_cols = [col for col in df.columns if col.startswith('D') and col[1:].isdigit()]
-    
+    # --- 2) Find dummy columns like D1, D2, ... (configurable prefix)
+    pat = re.compile(rf"^{dummy_prefix}\d+$")
+    dummy_cols = [c for c in df.columns if isinstance(c, str) and pat.match(c)]
     if not dummy_cols:
-        print("No dummy features found (format: D1, D2, D3, etc.)")
-        return
-    
-    # Sort dummy columns numerically (D1, D2, D3, ...)
-    dummy_cols = sorted(dummy_cols, key=lambda x: int(x[1:]))
-    
+        print(f"No dummy features found (pattern: {dummy_prefix}<digits>, e.g., D1, D2).")
+        return pd.DataFrame()
+
+    # Sort numerically (D1, D2, D10, ...)
+    dummy_cols.sort(key=lambda c: int(c[len(dummy_prefix):]))
+
     print(f"Found {len(dummy_cols)} dummy features\n")
-    print(f"Target: {target_col} (converted to -1, 0, 1)")
+    print(f"Target: {target_col} (binarized to -1/0/+1 with eps={eps_movement})")
     print("=" * 80)
-    
-    results = []
-    
+
+    rows = []
+
     for col in dummy_cols:
+        s = df[col]
 
-        both_positive = ((df[col] == 1) & (df['target'] == 1)).sum()
-        both_zero = ((df[col] == 0) & (df['target'] == 0)).sum()
-        both_negative = ((df[col] == -1) & (df['target'] == -1)).sum()
+        # --- 3) Compute on valid rows only (exclude NaNs in feature or target)
+        mask = s.notna() & df["_tgt"].notna()
+        n = int(mask.sum())
+        if n == 0:
+            print(f"\n{col}: no valid rows (all NaN).")
+            continue
 
-        total_agreement = both_positive + both_zero + both_negative
-        print("total_agreement:", total_agreement)
-        # Calculate percentages
-        total_records = len(df)
-        agreement_pct = (total_agreement / total_records) * 100
-        both_positive_pct = (both_positive / total_records) * 100
-        both_zero_pct = (both_zero / total_records) * 100
-        both_negative_pct = (both_negative / total_records) * 100
+        sc = s[mask].to_numpy()
+        tc = df["_tgt"][mask].to_numpy()
 
-        # Calculate disagreement
-        disagreement = total_records - total_agreement
-        disagreement_pct = (disagreement / total_records) * 100
-        
-        # Additional insights: same sign (both positive or both negative)
-        same_sign = both_positive + both_negative + both_zero
-        same_sign_pct = (same_sign / total_records) * 100
-        
-        results.append({
-            'Feature': col,
-            'Agreement %': agreement_pct,
-            'Both +1 %': both_positive_pct,
-            'Both 0 %': both_zero_pct,
-            'Both -1 %': both_negative_pct,
-            'Same Sign %': same_sign_pct,
-            'Disagreement %': disagreement_pct,
+        both_pos = int(((sc ==  1) & (tc ==  1)).sum())
+        both_zero = int(((sc ==  0) & (tc ==  0)).sum())
+        both_neg = int(((sc == -1) & (tc == -1)).sum())
+
+        agreement = both_pos + both_zero + both_neg
+        disagree = n - agreement
+
+        # same sign should mean (+1 with +1) OR (-1 with -1); zero is *not* a sign
+        same_sign = both_pos + both_neg
+
+        # Percentages over valid denominator n
+        pct = lambda x: (100.0 * x / n) if n else 0.0
+
+        rows.append({
+            "Feature": col,
+            "N (valid)": n,
+            "Agreement %": pct(agreement),
+            "Both +1 %":   pct(both_pos),
+            "Both 0 %":    pct(both_zero),
+            "Both -1 %":   pct(both_neg),
+            "Same Sign %": pct(same_sign),
+            "Disagreement %": pct(disagree),
+            "Feature non-zero %": pct((sc != 0).sum()),
         })
-        
+
         print(f"\n{col}:")
-        print(f"  Total Agreement:     {agreement_pct:6.2f}% ({total_agreement}/{total_records})")
-        print(f"    - Both +1:         {both_positive_pct:6.2f}% ({both_positive}/{total_records})")
-        print(f"    - Both  0:         {both_zero_pct:6.2f}% ({both_zero}/{total_records})")
-        print(f"    - Both -1:         {both_negative_pct:6.2f}% ({both_negative}/{total_records})")
-        print(f"  Same Sign (+1/-1):   {same_sign_pct:6.2f}% ({same_sign}/{total_records})")
-        print(f"  Disagreement:        {disagreement_pct:6.2f}% ({disagreement}/{total_records})")
-        print(f" Total Records:        {total_records}")
-        print(f" Total Non zero records: {((df[col] != 0).sum())} ({((df[col] != 0).sum()/total_records)*100:.2f}%)")
+        print(f"  Valid rows:          {n}")
+        print(f"  Total Agreement:     {pct(agreement):6.2f}% ({agreement}/{n})")
+        print(f"    - Both +1:         {pct(both_pos):6.2f}% ({both_pos}/{n})")
+        print(f"    - Both  0:         {pct(both_zero):6.2f}% ({both_zero}/{n})")
+        print(f"    - Both -1:         {pct(both_neg):6.2f}% ({both_neg}/{n})")
+        print(f"  Same Sign (+1/-1):   {pct(same_sign):6.2f}% ({same_sign}/{n})")
+        print(f"  Disagreement:        {pct(disagree):6.2f}% ({disagree}/{n})")
+        print(f"  Feature non-zero:    {pct((sc != 0).sum()):6.2f}% ({(sc != 0).sum()}/{n})")
 
     print("\n" + "=" * 80)
     print("\nSUMMARY - Sorted by Agreement %:")
     print("-" * 80)
-    
-    results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values('Agreement %', ascending=False)
-    
-    print(results_df.to_string(index=False))
-    
-    return results_df
 
-# Example usage:
-# results = analyze_dummy_features(df, 'target')
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(["Agreement %", "N (valid)"], ascending=[False, False]).reset_index(drop=True)
+        print(out.to_string(index=False))
+    else:
+        print("No results to summarize.")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    # Clean up temp
+    df.drop(columns=["_tgt"], inplace=True, errors="ignore")
+    return out
