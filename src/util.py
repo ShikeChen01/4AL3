@@ -7,9 +7,8 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import StandardScaler
-from scipy.stats import pearsonr
-import warnings
-import re
+from scipy.stats import chi2_contingency, pointbiserialr
+import seaborn as sns
 
 def load_data(path: str | Path, target='forward_returns') -> pd.DataFrame:
     """
@@ -38,295 +37,234 @@ def load_data(path: str | Path, target='forward_returns') -> pd.DataFrame:
 
     return df
 
-def analyze_linear_relationships(df, target_col, k=5):
+import numpy as np
+import pandas as pd
+
+def _mask_pct_rmv(s: pd.Series, remove_mode: str, percentile: float) -> pd.Series:
     """
-    Analyze linear relationships between features and target variable.
-    Shows top k plots one by one.
+    Returns a boolean mask: True for values to KEEP.
+    
+    Args:
+        s: Series to evaluate
+        remove_mode: 'extremes' or 'middle'
+        percentile: 0-50, defines the band size
+    """
+    s = s.astype(float)
+    if remove_mode == "extremes":
+        # Keep middle values (between percentiles)
+        lb = np.nanpercentile(s, percentile)
+        ub = np.nanpercentile(s, 100 - percentile)
+        return (s >= lb) & (s <= ub)
+    else:  # 'middle'
+        # Keep extreme values (outside middle band)
+        lb = np.nanpercentile(s, 50 - percentile)
+        ub = np.nanpercentile(s, 50 + percentile)
+        return (s < lb) | (s > ub)
+
+
+def preprocess_data(
+    df: pd.DataFrame,
+    remove_mode: str = "middle",   # 'extremes' or 'middle' (defines the band)
+    percentile: float = 47.5,      # 0–50
+    normalize: bool = True,
+    y_col: str = "target",
+    mode: str = "xy",              # 'x', 'y', or 'xy'
+):
+    """
+    Remove rows based on percentile bands.
+      remove_mode:
+        - 'extremes': drop bottom p% and top p%
+        - 'middle'  : drop middle band [50-p, 50+p]%
+      mode:
+        - 'x'  : filter using X columns only
+        - 'y'  : filter using y_col only
+        - 'xy' : filter if y_col OR ANY X is in the band
+    """
+    if y_col not in df.columns:
+        raise ValueError(f"y_col '{y_col}' not found")
+    if remove_mode not in ("extremes", "middle"):
+        raise ValueError("remove_mode must be 'extremes' or 'middle'")
+    if mode not in ("x", "y", "xy"):
+        raise ValueError("mode must be 'x', 'y', or 'xy'")
+    if not (0 <= percentile <= 50):
+        raise ValueError("percentile must be in [0, 50]")
+    
+    dfp = df.copy()
+    numeric = dfp.select_dtypes(include=[np.number]).columns.tolist()
+    
+    # Auto-pick X (prefer S*)
+    x_cols = [c for c in numeric if c != y_col and c.startswith("S")]
+    if not x_cols:
+        x_cols = [c for c in numeric if c != y_col]
+    if mode in ("x", "xy") and not x_cols:
+        raise ValueError("No numeric X columns found (excluding y_col).")
+    
+    # Normalize so percentiles are comparable
+    if normalize and numeric:
+        z = dfp[numeric].astype(float)
+        dfp[numeric] = (z - z.mean()) / z.std(ddof=0)
+    
+    # Build keep mask directly
+    if mode == "y":
+        keep = _mask_pct_rmv(dfp[y_col], remove_mode, percentile)
+    elif mode == "x":
+        keep = _mask_pct_rmv(dfp[x_cols[0]], remove_mode, percentile)
+        for c in x_cols[1:]:
+            keep &= _mask_pct_rmv(dfp[c], remove_mode, percentile)
+    else:  # mode == "xy"
+        keep = _mask_pct_rmv(dfp[y_col], remove_mode, percentile)
+        for c in x_cols:
+            keep &= _mask_pct_rmv(dfp[c], remove_mode, percentile)
+    
+    return dfp[keep].reset_index(drop=True)
+
+
+
+def linear_regression_plot(df_x, df_y, xlabel='X', ylabel='Y', title='Linear Regression'):
+    """
+    Perform linear regression and plot the results.
     
     Parameters:
     -----------
-    df : pandas.DataFrame
-        Input dataframe containing features and target
-    target_col : str
-        Name of the target column
-    k : int
-        Number of top correlations to plot (default: 5)
+    df_x : pandas DataFrame or Series
+        Independent variable(s)
+    df_y : pandas DataFrame or Series
+        Dependent variable
+    xlabel : str
+        Label for x-axis
+    ylabel : str
+        Label for y-axis
+    title : str
+        Plot title
     
     Returns:
     --------
-    pandas.DataFrame
-        DataFrame containing R values and other metrics for each feature
+    model : LinearRegression
+        Fitted sklearn model
     """
+    # Convert to numpy arrays and reshape if needed
+    X = np.array(df_x).reshape(-1, 1) if df_x.ndim == 1 else np.array(df_x)
+    y = np.array(df_y).ravel()
     
-    # Check if target column exists
-    if target_col not in df.columns:
-        raise ValueError(f"Target column '{target_col}' not found in DataFrame")
+    # Perform linear regression
+    model = LinearRegression()
+    model.fit(X, y)
+    y_pred = model.predict(X)
     
-    # Separate features from target
-    feature_cols = [col for col in df.columns if col != target_col]
+    # Calculate R-squared
+    r_squared = model.score(X, y)
     
-    # Initialize results dictionary
-    results = {
-        'Feature': [],
-        'R_value': [],
-        'R_squared': [],
-        'P_value': [],
-        'RMSE': [],
-        'Slope': [],
-        'Intercept': []
-    }
+    # Create plot
+    plt.figure(figsize=(10, 6))
+    plt.scatter(X, y, alpha=0.5, label='Data points')
+    plt.plot(X, y_pred, color='red', linewidth=2, label='Regression line')
     
-    # Store plot data
-    plot_data = {}
+    # Add equation and R-squared to plot
+    if X.shape[1] == 1:
+        equation = f'y = {model.coef_[0]:.3f}x + {model.intercept_:.3f}'
+    else:
+        equation = f'y = {model.intercept_:.3f} + ...'
     
-    # Analyze each feature
+    plt.text(0.05, 0.95, f'{equation}\nR² = {r_squared:.3f}', 
+             transform=plt.gca().transAxes, verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    return model
+
+
+def analyze_correlations(df, target_col, feature_cols=None, plot_type='bar'):
+    """
+    Analyze correlations between binary features and a target variable.
+    
+    Parameters:
+    -----------
+    df : pandas DataFrame
+        Input dataframe containing features and target
+    target_col : str
+        Name of the target column
+    feature_cols : list, optional
+        List of binary feature column names. If None, uses all columns except target
+    plot_type : str
+        'bar' for bar plot, 'heatmap' for correlation heatmap
+    
+    Returns:
+    --------
+    results_df : pandas DataFrame
+        DataFrame with correlation statistics for each feature
+    """
+    # Select features
+    if feature_cols is None:
+        feature_cols = [col for col in df.columns if col != target_col]
+    
+    # Store results
+    results = []
+    
+    # Get target values
+    target = df[target_col]
+    is_binary_target = df[target_col].nunique() == 2
+    
     for feature in feature_cols:
-        # Skip non-numeric columns
-        if not pd.api.types.is_numeric_dtype(df[feature]):
-            print(f"Skipping non-numeric column: {feature}")
-            continue
-            
-        # Remove NaN values
-        valid_mask = df[[feature, target_col]].notna().all(axis=1)
-        if valid_mask.sum() < 2:
-            print(f"Skipping {feature}: insufficient valid data")
-            continue
-            
-        X = df.loc[valid_mask, feature].values.reshape(-1, 1)
-        y = df.loc[valid_mask, target_col].values
+        feature_data = df[feature]
         
-        # Check for constant features (zero variance)
-        if np.var(X) == 0 or np.var(y) == 0:
-            print(f"Skipping {feature}: constant values (zero variance)")
-            continue
+        # Calculate Pearson correlation
+        pearson_corr = feature_data.corr(target)
         
-        # Check if feature has very low variance
-        if np.std(X) < 1e-10 or np.std(y) < 1e-10:
-            print(f"Skipping {feature}: near-constant values (extremely low variance)")
-            continue
+        # Calculate point-biserial correlation if target is binary
+        if is_binary_target:
+            pb_corr, pb_pval = pointbiserialr(target, feature_data)
+        else:
+            pb_corr, pb_pval = pearson_corr, np.nan
         
-        # Fit linear regression
-        lr = LinearRegression()
-        lr.fit(X, y)
-        y_pred = lr.predict(X)
+        # Chi-square test for independence (if both are binary)
+        if is_binary_target:
+            contingency = pd.crosstab(feature_data, target)
+            chi2, p_value, dof, expected = chi2_contingency(contingency)
+        else:
+            chi2, p_value = np.nan, np.nan
         
-        # Calculate metrics with error handling
-        try:
-            # Suppress the specific warning and handle it
-            with warnings.catch_warnings():
-                warnings.filterwarnings('ignore', message='An input array is constant')
-                r_value, p_value = pearsonr(X.flatten(), y)
-                
-            # Check if correlation is undefined (NaN)
-            if np.isnan(r_value):
-                print(f"Skipping {feature}: correlation undefined")
-                continue
-                
-        except Exception as e:
-            print(f"Skipping {feature}: error calculating correlation - {e}")
-            continue
-        
-        # Calculate other metrics
-        r_squared = r2_score(y, y_pred)
-        rmse = np.sqrt(mean_squared_error(y, y_pred))
-        
-        # Store results
-        results['Feature'].append(feature)
-        results['R_value'].append(r_value)
-        results['R_squared'].append(r_squared)
-        results['P_value'].append(p_value)
-        results['RMSE'].append(rmse)
-        results['Slope'].append(lr.coef_[0])
-        results['Intercept'].append(lr.intercept_)
-        
-        # Store data for plotting
-        plot_data[feature] = {
-            'X': X.flatten(),
-            'y': y,
-            'lr': lr
-        }
+        results.append({
+            'Feature': feature,
+            'Pearson_Correlation': pearson_corr,
+            'Point_Biserial_Corr': pb_corr,
+            'Point_Biserial_PValue': pb_pval,
+            'Chi2_Statistic': chi2,
+            'Chi2_PValue': p_value
+        })
     
-    # Create results DataFrame
-    results_df = pd.DataFrame(results)
+    results_df = pd.DataFrame(results).sort_values('Pearson_Correlation', 
+                                                    key=abs, 
+                                                    ascending=False)
     
-    if len(results_df) == 0:
-        print("No valid numeric features found for analysis")
-        return results_df
-    
-    # Sort by absolute R value
-    results_df = results_df.sort_values('R_value', key=abs, ascending=False)
-    
-    # Select top k features for plotting
-    top_k_features = results_df.head(k)['Feature'].tolist()
-    
-    # Plot top k features one by one
-    for i, feature in enumerate(top_k_features, 1):
-        # Get data
-        data = plot_data[feature]
-        X = data['X']
-        y = data['y']
-        lr = data['lr']
+    # Create visualization
+    if plot_type == 'bar':
+        plt.figure(figsize=(12, 6))
+        colors = ['green' if x > 0 else 'red' for x in results_df['Pearson_Correlation']]
+        plt.barh(results_df['Feature'], results_df['Pearson_Correlation'], color=colors, alpha=0.7)
+        plt.xlabel('Correlation with Target', fontsize=12)
+        plt.ylabel('Features', fontsize=12)
+        plt.title(f'Binary Feature Correlations with {target_col}', fontsize=14, fontweight='bold')
+        plt.axvline(x=0, color='black', linestyle='-', linewidth=0.8)
+        plt.grid(axis='x', alpha=0.3)
+        plt.tight_layout()
+        plt.show()
         
-        # Get statistics
-        feature_stats = results_df[results_df['Feature'] == feature].iloc[0]
+    elif plot_type == 'heatmap':
+        # Create correlation matrix
+        corr_matrix = df[feature_cols + [target_col]].corr()
         
-        # Create individual plot
-        plt.figure(figsize=(10, 6))
-        
-        # Calculate axis limits with padding
-        x_range = X.max() - X.min()
-        y_range = y.max() - y.min()
-        
-        # Handle case where range might be zero
-        x_padding = max(x_range * 0.1, 0.1)
-        y_padding = max(y_range * 0.1, 0.1)
-        
-        x_min, x_max = X.min() - x_padding, X.max() + x_padding
-        y_min, y_max = y.min() - y_padding, y.max() + y_padding
-        
-        # Scatter plot
-        plt.scatter(X, y, alpha=0.6, s=30, color='blue', edgecolors='darkblue', 
-                   linewidth=0.5, label='Data points')
-        
-        # Regression line
-        X_line = np.linspace(x_min, x_max, 100).reshape(-1, 1)
-        y_line = lr.predict(X_line)
-        plt.plot(X_line, y_line, 'r-', linewidth=2, alpha=0.8,
-                label=f'y = {feature_stats["Slope"]:.3f}x + {feature_stats["Intercept"]:.3f}')
-        
-        # Set limits
-        plt.xlim(x_min, x_max)
-        plt.ylim(y_min, y_max)
-        
-        # Labels and title
-        plt.xlabel(feature, fontsize=12, fontweight='bold')
-        plt.ylabel(target_col, fontsize=12, fontweight='bold')
-        
-        title = f'Linear Regression: {feature} vs {target_col}\n'
-        title += f'R = {feature_stats["R_value"]:.3f}, '
-        title += f'R² = {feature_stats["R_squared"]:.3f}, '
-        title += f'RMSE = {feature_stats["RMSE"]:.3f}, '
-        title += f'p-value = {feature_stats["P_value"]:.3e}'
-        plt.title(title, fontsize=14, fontweight='bold')
-        
-        # Add grid
-        plt.grid(True, alpha=0.3, linestyle='--')
-        
-        # Add data range info
-        range_text = f'X range: [{X.min():.2f}, {X.max():.2f}]\n'
-        range_text += f'Y range: [{y.min():.2f}, {y.max():.2f}]\n'
-        range_text += f'N samples: {len(X)}'
-        plt.text(0.02, 0.98, range_text, transform=plt.gca().transAxes, 
-                fontsize=10, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
-        
-        # Legend
-        plt.legend(loc='best', fontsize=10, framealpha=0.9)
-        
-        # Show plot number
-        plt.text(0.98, 0.02, f'Plot {i} of {len(top_k_features)}', 
-                transform=plt.gca().transAxes, fontsize=10, 
-                horizontalalignment='right',
-                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
-        
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(corr_matrix, annot=True, fmt='.2f', cmap='coolwarm', 
+                    center=0, square=True, linewidths=1, cbar_kws={"shrink": 0.8})
+        plt.title(f'Correlation Heatmap (including {target_col})', fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.show()
     
     return results_df
-
-def analyze_dummy_features(
-    df_original: pd.DataFrame,
-    target_col: str,
-    eps_movement: float = 0.005,
-    dummy_prefix: str = r"D"
-) -> pd.DataFrame:
-    """
-    Compare ternary dummy features (values in {-1,0,1}) against a ternary target.
-    Prints per-feature stats and returns a sorted DataFrame of results.
-    """
-    df = df_original.copy()
-
-    # --- 1) Robust target binning: -1 / 0 / +1 in a single vectorized step
-    v = df[target_col].to_numpy()
-    tgt = np.where(v >  eps_movement,  1,
-          np.where(v < -eps_movement, -1, 0)).astype(np.int8)
-    df["_tgt"] = tgt
-
-    # --- 2) Find dummy columns like D1, D2, ... (configurable prefix)
-    pat = re.compile(rf"^{dummy_prefix}\d+$")
-    dummy_cols = [c for c in df.columns if isinstance(c, str) and pat.match(c)]
-    if not dummy_cols:
-        print(f"No dummy features found (pattern: {dummy_prefix}<digits>, e.g., D1, D2).")
-        return pd.DataFrame()
-
-    # Sort numerically (D1, D2, D10, ...)
-    dummy_cols.sort(key=lambda c: int(c[len(dummy_prefix):]))
-
-    print(f"Found {len(dummy_cols)} dummy features\n")
-    print(f"Target: {target_col} (binarized to -1/0/+1 with eps={eps_movement})")
-    print("=" * 80)
-
-    rows = []
-
-    for col in dummy_cols:
-        s = df[col]
-
-        # --- 3) Compute on valid rows only (exclude NaNs in feature or target)
-        mask = s.notna() & df["_tgt"].notna()
-        n = int(mask.sum())
-        if n == 0:
-            print(f"\n{col}: no valid rows (all NaN).")
-            continue
-
-        sc = s[mask].to_numpy()
-        tc = df["_tgt"][mask].to_numpy()
-
-        both_pos = int(((sc ==  1) & (tc ==  1)).sum())
-        both_zero = int(((sc ==  0) & (tc ==  0)).sum())
-        both_neg = int(((sc == -1) & (tc == -1)).sum())
-
-        agreement = both_pos + both_zero + both_neg
-        disagree = n - agreement
-
-        # same sign should mean (+1 with +1) OR (-1 with -1); zero is *not* a sign
-        same_sign = both_pos + both_neg
-
-        # Percentages over valid denominator n
-        pct = lambda x: (100.0 * x / n) if n else 0.0
-
-        rows.append({
-            "Feature": col,
-            "N (valid)": n,
-            "Agreement %": pct(agreement),
-            "Both +1 %":   pct(both_pos),
-            "Both 0 %":    pct(both_zero),
-            "Both -1 %":   pct(both_neg),
-            "Same Sign %": pct(same_sign),
-            "Disagreement %": pct(disagree),
-            "Feature non-zero %": pct((sc != 0).sum()),
-        })
-
-        print(f"\n{col}:")
-        print(f"  Valid rows:          {n}")
-        print(f"  Total Agreement:     {pct(agreement):6.2f}% ({agreement}/{n})")
-        print(f"    - Both +1:         {pct(both_pos):6.2f}% ({both_pos}/{n})")
-        print(f"    - Both  0:         {pct(both_zero):6.2f}% ({both_zero}/{n})")
-        print(f"    - Both -1:         {pct(both_neg):6.2f}% ({both_neg}/{n})")
-        print(f"  Same Sign (+1/-1):   {pct(same_sign):6.2f}% ({same_sign}/{n})")
-        print(f"  Disagreement:        {pct(disagree):6.2f}% ({disagree}/{n})")
-        print(f"  Feature non-zero:    {pct((sc != 0).sum()):6.2f}% ({(sc != 0).sum()}/{n})")
-
-    print("\n" + "=" * 80)
-    print("\nSUMMARY - Sorted by Agreement %:")
-    print("-" * 80)
-
-    out = pd.DataFrame(rows)
-    if not out.empty:
-        out = out.sort_values(["Agreement %", "N (valid)"], ascending=[False, False]).reset_index(drop=True)
-        print(out.to_string(index=False))
-    else:
-        print("No results to summarize.")
-
-    # Clean up temp
-    df.drop(columns=["_tgt"], inplace=True, errors="ignore")
-    return out
