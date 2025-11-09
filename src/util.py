@@ -9,6 +9,23 @@ from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import chi2_contingency, pointbiserialr
 import seaborn as sns
+import warnings
+
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    accuracy_score, balanced_accuracy_score,
+    precision_recall_fscore_support, confusion_matrix
+)
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
 
 def load_data(path: str | Path, target='forward_returns') -> pd.DataFrame:
     """
@@ -69,7 +86,7 @@ def preprocess_data(
     normalize: bool = True,
     y_col: str = "target",
     mode: str = "xy",              # 'x', 'y', or 'xy'
-):
+) -> pd.DataFrame:
     """
     Remove rows based on percentile bands.
       remove_mode:
@@ -268,3 +285,124 @@ def analyze_correlations(df, target_col, feature_cols=None, plot_type='bar'):
         plt.show()
     
     return results_df
+
+
+def run_tree_models(
+    df: pd.DataFrame, 
+    cols: list[str], 
+    target: str, 
+    tree_type: str = "dt",
+    test_size: float = 0.3, 
+    random_state: int = 42
+):
+    """
+    Train/evaluate a tree-based classifier on given dataframe.
+    Prints metrics; returns nothing.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+    cols : list[str]     # feature columns
+    target : str         # target column (classification)
+    tree_type : str      # one of: "dt", "rf", "gb", "et"
+    test_size : float    # test split ratio
+    random_state : int   # random seed
+    """
+    warnings.filterwarnings("ignore")
+
+    df = df.copy()
+
+    # --- 1) Split
+    X = df[cols].copy()
+    y = df[target].copy()
+
+    print(X.shape, y.shape)
+    
+    # Basic dtype-based split of features
+    cat_cols = [c for c in cols if str(X[c].dtype) in ("object", "category")]
+    num_cols = [c for c in cols if c not in cat_cols]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state
+    )
+
+    # --- 2) Preprocess
+    pre = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols),
+            ("num", "passthrough", num_cols),
+        ],
+        remainder="drop",
+        n_jobs=None, 
+        verbose=True
+    )
+
+    # --- 3) Model factory
+    factory = {
+        "dt": DecisionTreeClassifier(random_state=random_state, class_weight="balanced"),
+        "rf": RandomForestClassifier(n_estimators=300, random_state=random_state,
+                                     class_weight="balanced_subsample"),
+        "gb": GradientBoostingClassifier(random_state=random_state),
+        "et": ExtraTreesClassifier(n_estimators=400, random_state=random_state,
+                                   class_weight="balanced"),
+        "dtr": DecisionTreeRegressor(random_state=random_state),
+        "rfr": RandomForestRegressor(n_estimators=300, random_state=random_state),
+        "gbr": GradientBoostingRegressor(random_state=random_state),
+        "etr": ExtraTreesRegressor(n_estimators=400, random_state=random_state)
+    }
+
+    # Validate tree_type
+    if tree_type not in factory:
+        print(f"Invalid tree_type '{tree_type}'. Use one of: {list(factory.keys())}")
+        return
+
+    # --- 4) Train & report
+    clf = factory[tree_type]
+    pipe = Pipeline([("prep", pre), ("clf", clf)])
+    pipe.fit(X_train, y_train)
+    y_pred = pipe.predict(X_test)
+
+    if tree_type in {"dtr", "rfr", "gbr", "etr"}:
+        # Regression metrics
+        mse = mean_squared_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
+        print(f"\n=== {tree_type.upper()} ===")
+        print(f"MSE: {mse:.4f}")
+        print(f"R²:  {r2:.4f}")
+        return 
+
+    acc = accuracy_score(y_test, y_pred)
+    bacc = balanced_accuracy_score(y_test, y_pred)
+    prec, rec, f1, _ = precision_recall_fscore_support(
+        y_test, y_pred, average="macro", zero_division=0
+    )
+    cm = confusion_matrix(y_test, y_pred)
+
+    print(f"\n=== {tree_type.upper()} ===")
+    print(f"Accuracy:           {acc:.4f}")
+    print(f"Balanced Accuracy:  {bacc:.4f}")
+    print(f"Macro Precision:    {prec:.4f}")
+    print(f"Macro Recall:       {rec:.4f}")
+    print(f"Macro F1:           {f1:.4f}")
+    print("Confusion Matrix:")
+    print(cm)
+
+
+def discretize_target(df: pd.DataFrame, target: str = "target", eps: float = 0.005, upper_bound: float = 0.1, num_bins : int = 5) -> pd.DataFrame:
+    df = df.copy()
+    df['target'] = df['target'].apply(lambda x: 0 if abs(x) < eps else x)
+    df['target'] = df['target'].apply(lambda x: upper_bound if x >= upper_bound else x)
+    df['target'] = df['target'].apply(lambda x: -upper_bound if x <= -upper_bound else x)
+
+    if(num_bins % 2 == 0):
+        raise ValueError("num_bins must be odd")
+
+    num_bins = num_bins - 3  # eps, upper on both sides
+    bin_width = (upper_bound - eps) / (num_bins / 2)
+    cur_bin = eps
+    for i in range(0, num_bins // 2):
+        df['target'] = df['target'].apply(lambda x: cur_bin + bin_width if x > cur_bin and x < cur_bin + bin_width else x)
+        df['target'] = df['target'].apply(lambda x: -cur_bin - bin_width if x < -cur_bin and x > -cur_bin - bin_width else x)
+        cur_bin += bin_width
+        
+    return df

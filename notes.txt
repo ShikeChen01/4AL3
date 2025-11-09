@@ -28,6 +28,13 @@ output2: how much SP500 will move tmr
 output3: prediction_confidence
 
 
+because the complexity/noisyness of the dataset, the weak relationships observed between the target and the training data
+also because we do not know what is behind each features and its preprocess, 
+it is very hard for us to make any meaningful hypothesis
+so we prefer unsuperized learning methods
+
+
+
 
 
 
