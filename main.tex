@@ -18,6 +18,15 @@
 \usepackage{inconsolata}
 \usepackage{graphicx}
 
+\usepackage{amsmath}      % math environments
+\usepackage{amssymb}      % extra math symbols
+\usepackage{amsfonts}     % math fonts, including \mathbb
+\usepackage{bbm}          % gives \mathbbm{1} (indicator function)
+\usepackage{graphicx}     % images
+\usepackage{booktabs}     % pretty tables (optional)
+\usepackage{hyperref}     % clickable refs (always useful)
+
+
 % If the title and author information does not fit in the area allocated, uncomment the following
 %
 %\setlength\titlebox{<dim>}
@@ -74,24 +83,178 @@
 % \end{abstract}
 
 \section{Introduction}
+Currently majority of the financial market prediction models are relying 
+on traditional index digging, technical analysis, regression models. 
+However, with modern machine learning techniques emerging in NLP, 
+the industry see a huge potential in bringing complex models to 
+analyze and predict the market movement. 
 
-Here, write a brief introduction to the problem you are solving. This can be adapted from your problem description and motivation from the original proposal. This should be around 0.25-0.5 pages.
+Over the years, majority of the investors, including professionals, 
+have struggled to consistently beat the S\&P500 index. In this challenge, 
+we also understand the effect of the efficient market hypothesis, which 
+states that stock prices fully reflect all available information. Thus, it is impossible to 
+consistently achieve higher returns than average market returns on a
+risk-adjusted basis, given that stock prices should only react to new information. 
+
+However, with the advancement of machine learning techniques, if we are able 
+to implement these new techniques to analyze the market data, we may be able to uncover
+hidden patterns and profit. Since these are also considered as new information, the 
+effective market hypothesis still holds. 
+
+Since we do not know the preprocessing steps of the features, it is difficult for the 
+team to use traditional, statistical methods to give meaningful insightful analysis. Thus, 
+we decided to use predominantly unsuperised learning methods to analyze the data and
+predict the S\&P500 return.
+
+The overall objective of our project is to predict the S\&P500 return 
+using the pre-processed data provided by Hull Tactical. 
 
 \section{Related Work}
 
 Here, talk about the related work you encountered for your approach. Cite at least 5 references. Refer to item 2. No one has done exactly your task? Write about the most similar thing you can find. This should be around 0.25-0.5 pages.
 
+
+What is a good approach to predict stock prices with unsuprivised machine learning techniques?
+Instinctively, reinforcement learning especially Proximal Policy Optimization (PPO)
+seems to be the best fit for this task.[1]
+PPO is an on-policy actor-critic method that maximizes a clipped surrogate objective 
+to prevent destabilizing policy updates. In markets, this is attractive because 
+the reward feedback comes from interaction (PnL, risk-adjusted returns), not 
+labeled targets—i.e., the problem is effectively label-free. Second, the environment is 
+non-stationary and noisy, so conservative trust-region-like updates (PPO’s clipping) 
+curb policy collapse. At last, PPO pairs naturally with recurrent encoders (e.g., GRU) 
+and risk-aware rewards (e.g., Sortino ratio) already shown effective in GDQN/GDPG-style systems.[2]
+
+How do we measure risk-adjusted returns? The most common way is to use the Sharpe ratio. The 
+Sharpe ratio is a good indicator for most of the investment strategies. However, in the case of 
+reinforcement learning based trading strategy, it is not enough. The biggest risk of such trading
+strategy is the non-deterministic nature of a neural netowrk. Thus, careful selection of a neural
+network architecture is important to reduce the variance of the returns.
+
+
+
 \section{Dataset}
 
-You should write about your dataset here, following the guidelines regarding item 1. This section may be 0.5-1 pages. Depending on your specific dataset, you may want to include subsections for the preprocessing, annotation, etc.
+The dataset used in this project is the same equity return prediction dataset  
+referenced in the project proposal. An updated version of the dataset was  
+released on November 6th. The update primarily expanded the number of  
+observations and refined the calculation of forward returns. However, this  
+revision did not materially change the statistical properties of the data  
+distribution, nor did it require changes to our modeling pipeline, since our  
+learning framework does not rely on absolute scale but rather on relative  
+directional signals.
 
+Each row in the dataset corresponds to a single market snapshot at time $t$ for  
+a specific equity, containing both price-derived technical indicators and  
+macroeconomic or market-level descriptors. The prediction target is  
+\texttt{forward\_returns}, the realized percentage change in the security price  
+from $t$ to $t + \Delta$, where $\Delta$ is defined by the dataset provider.  
+In our processing, we rename this column to \texttt{target} for consistency.
+
+As expected in financial forecasting problems, the empirical distribution of  
+\texttt{target} is highly concentrated around zero, with heavy tails and high  
+kurtosis. This reflects the structural difficulty of short-horizon return  
+prediction, where most price movements are dominated by noise.
+
+The dataset also contains missing values, particularly in indicators  
+constructed from rolling windows of different lengths. To avoid discarding  
+information, we do not remove rows with missing data. Instead, we replace  
+\texttt{NaN} values with zeros and add binary missing indicator flags for each  
+affected feature:
+\[
+x^{(\text{filled})}_i =
+\begin{cases}
+0, & \text{if } x_i \text{ was missing} \\
+x_i, & \text{otherwise}
+\end{cases}
+\]
+This preserves potential information carried by the absence of values. Data  
+loading and cleaning follows our \texttt{load\_data} and missing-indicator  
+augmentation utility functions.
+
+\vspace{6pt}
 \section{Features}
 
-Describe any features you used for your model, or how your data was input to your model. Are you doing feature engineering or feature selection? Are you learning embeddings? Is it all part of one neural network? Refer to item 2. This may range from 0.25 pages to 0.5 pages.
+We work directly with the numerical feature columns provided in the dataset.  
+No manual feature engineering was performed beyond:
+\begin{itemize}
+    \item Standardization of all numeric features via $z$-score normalization.
+    \item Addition of missing-value indicator features for all originally
+          \texttt{NaN}-carrying columns.
+    \item Optional inclusion of a constant bias term during reinforcement
+          learning.
+\end{itemize}
 
+Because financial features often exhibit collinearity, we conducted correlation  
+inspections to assess which features carry directional information relative to  
+\texttt{target}. Point-biserial and Pearson correlations were used for this  
+purpose. In the reinforcement learning setting, the environment returns a state  
+vector consisting of the normalized feature vector at time step $t$, optionally  
+concatenated with the agent's previous action to preserve position memory.
+
+\vspace{6pt}
 \section{Implementation}
 
-Describe your model and implementation here. Refer to item 4. This may take around a page.
+Our core modeling framework is a reinforcement learning (RL) agent based on  
+Proximal Policy Optimization (PPO). Rather than predicting raw return values,  
+the task is formulated as a sequential decision problem. At each timestep, the  
+agent selects one of three discrete actions:
+\[
+a_t \in \{-1, 0, +1\}
+\]
+representing \texttt{sell}, \texttt{hold}, or \texttt{buy} decisions.
+
+\subsection{Environment}
+
+We define a custom environment that sequentially feeds feature vectors over  
+time. The reward reflects directional correctness rather than magnitude:
+\[
+r_t = \mathbb{1}(\text{sign}(a_t) = \text{sign}(\text{target}_t)) -
+      \mathbb{1}(\text{sign}(a_t) \neq \text{sign}(\text{target}_t))
+\]
+This converts return prediction into directional prediction, which is more  
+robust for noisy financial data.
+
+\subsection{Policy and Value Networks}
+
+The agent maintains:
+\begin{itemize}
+    \item A policy network $\pi_\theta(a_t | s_t)$ producing action probabilities.
+    \item A value network $V_\phi(s_t)$ estimating expected cumulative reward.
+\end{itemize}
+
+Both networks are multilayer perceptrons with ReLU activations. The policy is  
+trained using the PPO clipped surrogate objective:
+\[
+L_{\pi} = -\mathbb{E}\left[\min(r_t(\theta)\hat{A}_t,
+\text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t)\right]
+\]
+The value network is trained via mean-squared error against return-to-go.
+
+\subsection{Training Procedure}
+
+Training alternates between:
+\begin{enumerate}
+    \item Rollout: interact with the environment to collect trajectories.
+    \item Update: compute generalized advantage estimates (GAE) and apply PPO.
+\end{enumerate}
+
+Although GPU acceleration is used for neural network forward and backward  
+passes, rollout occurs step-by-step in Python. This creates a performance  
+bottleneck where environment interaction becomes the dominant runtime cost.  
+Parallel rollout environments are a planned optimization.
+
+\subsection{Baselines}
+
+To benchmark reinforcement learning performance, we also train three  
+supervised models:
+\begin{itemize}
+    \item Gradient-Boosted Trees.
+    \item Multilayer Perceptron Regression (MSE objective).
+\end{itemize}
+
+These baselines help evaluate whether reward-based directional optimization  
+provides an advantage over direct regression on \texttt{target}.
 
 \section{Results and Evaluation}
 

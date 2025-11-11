@@ -15,3 +15,6 @@ main.pdf
 *.bib
 *.bst
 main.fdb_latexmk
+*.pt
+checkpoints/ppo_full.pt
+*.pt
