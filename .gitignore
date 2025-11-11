@@ -2,3 +2,16 @@ data/
 
 *.drawio
 *.pyc
+*.aux 
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+__pycache__/
+*.fls
+*.synctex.gz
+main.pdf
+*.bib
+*.bst
+main.fdb_latexmk
