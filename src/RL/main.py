@@ -1,26 +1,25 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 import os
+import json
+
 import numpy as np
 import pandas as pd
 import torch
-import matplotlib.pyplot as plt  # <-- NEW
+import matplotlib.pyplot as plt  # plotting optional
 
 from environment import Environment
 from rewards import SimpleSignReward
 from agent import PPOAgent, PPOConfig
 from sklearn.preprocessing import StandardScaler
-import json
-from dataclasses import asdict
 import joblib
-
 
 # =========================
 # CONFIG (edit here)
 # =========================
-DATA_PATH: str = r"C:\Year4\4AL3\final-project\4AL3\src\RL\data\train.csv"        # set me
+DATA_PATH: str = r"data/train.csv"  # set me
 TARGET_COL: str = "forward_returns"       # will be renamed to 'target'
 FEATURE_COLS: Optional[List[str]] = None  # None => all except target
 DEVICE: str = "cuda"                      # "cuda" or "cpu"
@@ -28,7 +27,7 @@ INCLUDE_BIAS: bool = False
 THRESHOLD: float = 0.0
 
 # Saving
-SAVE_DIR: str = r"C:\Year4\4AL3\final-project\4AL3\src\RL\checkpoints"
+SAVE_DIR: str = r"checkpoints"
 SAVE_EVERY: int = 50
 
 # PPO / Training
@@ -47,7 +46,7 @@ L2_LAMBDA: float = 1e-4
 
 # Cross-validation / Eval
 K_FOLDS: int = 1
-EVAL_EVERY: int = 100     # Evaluate MSE every this many iterations
+EVAL_EVERY: int = 100     # Evaluate MSE/accuracy every this many iterations
 
 # Plot saving (optional)
 PLOT_DIR: str = "./plots"
@@ -80,6 +79,7 @@ def load_data(path: str | Path, target: str = TARGET_COL) -> Tuple[pd.DataFrame,
 
     df = df.rename(columns={target: "target"})
 
+    # drop leakage/irrelevant columns if present
     to_drop = [c for c in df.columns if ("market_forward_excess_returns" in c) or ("risk_free_rate" in c)]
     if to_drop:
         df = df.drop(columns=to_drop)
@@ -103,13 +103,12 @@ def save_training_artifacts(
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     save_dir.mkdir(parents=True, exist_ok=True)
-    # Resolve the exact feature set in the order used to build obs
     resolved_features = feature_cols if feature_cols is not None else [c for c in df.columns if c != "target"]
 
     run_cfg = {
         "ppo_config": asdict(cfg),
-        "obs_dim": int(agent.obs_dim),
-        "n_actions": int(agent.n_actions) if hasattr(agent, "n_actions") else 3,
+        "obs_dim": int(agent.model.shared[0].in_features),  # derived
+        "n_actions": 3,
         "device": str(agent.device),
         "include_bias": bool(INCLUDE_BIAS),
         "threshold": float(THRESHOLD),
@@ -120,16 +119,11 @@ def save_training_artifacts(
         "env_meta": extra or {},
     }
 
-    # JSON config
     with open(save_dir / "run_config.json", "w", encoding="utf-8") as f:
         json.dump(run_cfg, f, indent=2)
 
-    # Scaler (to guarantee identical transform on reload)
     joblib.dump(scaler, save_dir / "scaler.joblib")
-
-    # Also persist feature order as CSV for eyeballing
     pd.Series(resolved_features, name="feature_cols").to_csv(save_dir / "feature_cols.csv", index=False)
-
 
 # =========================
 # PPO rollout
@@ -218,6 +212,41 @@ def ensure_dir(path: str | Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
+def save_curves_csv(
+    save_dir: Path,
+    base_name: str,
+    hist: Dict[str, List[float]],
+) -> Tuple[Path, Optional[Path]]:
+    """
+    Writes two CSVs:
+      1) '{base_name}_training_curves.csv' with per-iteration policy_loss, value_loss, entropy, avg_return
+      2) '{base_name}_eval_curves.csv' with rows at eval points: iter, mse, acc (if any evals were recorded)
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Per-iteration training stats
+    train_df = pd.DataFrame({
+        "iteration": np.arange(1, len(hist["policy_loss"]) + 1, dtype=int),
+        "policy_loss": hist["policy_loss"],
+        "value_loss": hist["value_loss"],
+        "entropy": hist["entropy"],
+        "avg_return": hist["avg_return"],
+    })
+    train_csv = save_dir / f"{base_name}_training_curves.csv"
+    train_df.to_csv(train_csv, index=False)
+
+    eval_csv_path = None
+    if hist["mse_eval"]:
+        eval_df = pd.DataFrame({
+            "iteration": hist["iter_eval"],
+            "mse": hist["mse_eval"],
+            "sign_accuracy": hist["acc_eval"],
+        })
+        eval_csv_path = save_dir / f"{base_name}_eval_curves.csv"
+        eval_df.to_csv(eval_csv_path, index=False)
+
+    return train_csv, eval_csv_path
+
 def train_on_dataframe(
     df: pd.DataFrame,
     fold_tag: str,
@@ -241,14 +270,15 @@ def train_on_dataframe(
     )
     agent = PPOAgent(obs_dim=env.obs_dim, n_actions=3, device=device, cfg=cfg)
 
-    # ---- NEW: history trackers ----
+    # ---- history trackers ----
     hist = {
         "policy_loss": [],
         "value_loss": [],
         "entropy": [],
         "avg_return": [],
-        "mse_eval": [],     # recorded every EVAL_EVERY (if eval_env provided)
-        "iter_eval": []     # x-axis for MSE points
+        "mse_eval": [],     # recorded every EVAL_EVERY
+        "acc_eval": [],
+        "iter_eval": []
     }
 
     for it in range(ITERS):
@@ -267,10 +297,11 @@ def train_on_dataframe(
                   f"PolicyLoss: {stats['policy_loss']:.4f} | ValueLoss: {stats['value_loss']:.4f} | "
                   f"Entropy: {stats['entropy']:.4f}")
 
-        # periodic eval MSE
+        # periodic eval MSE & sign-accuracy
         if eval_env is not None and scaler is not None and (it + 1) % EVAL_EVERY == 0:
             mse, acc = evaluate_mse(eval_env, agent, scaler)
             hist["mse_eval"].append(mse)
+            hist["acc_eval"].append(acc)
             hist["iter_eval"].append(it + 1)
             print(f"[{fold_tag}] Eval at Iter {it+1}: MSE={mse:.6f} | sign-acc={acc:.4f}")
 
@@ -298,7 +329,7 @@ def forward_chaining_folds(n: int, k: int) -> List[Tuple[np.ndarray, np.ndarray]
     return folds
 
 # =========================
-# Plot helpers (NEW)
+# Plot helpers (optional)
 # =========================
 def plot_series(y: List[float], title: str, x: Optional[List[int]] = None, save_path: Optional[Path] = None):
     if x is None:
@@ -329,25 +360,44 @@ def main() -> None:
         env_eval = Environment(full_df, "target", FEATURE_COLS, reward=SimpleSignReward(THRESHOLD))
         agent, _, hist = train_on_dataframe(full_df, fold_tag="FULL", eval_env=env_eval, scaler=scaler)
 
-        # ---- NEW: plots ----
-        plot_series(hist["policy_loss"], "Policy Loss", save_path=(plot_dir / "policy_loss.png" if SAVE_PLOTS else None))
-        plot_series(hist["value_loss"], "Value Loss", save_path=(plot_dir / "value_loss.png" if SAVE_PLOTS else None))
-        plot_series(hist["avg_return"], "Average Return", save_path=(plot_dir / "avg_return.png" if SAVE_PLOTS else None))
-        if hist["mse_eval"]:
-            plot_series(hist["mse_eval"], "Eval MSE", x=hist["iter_eval"],
-                        save_path=(plot_dir / "mse_eval.png" if SAVE_PLOTS else None))
+        # ---- CSV curves (saved alongside checkpoints) ----
+        train_csv, eval_csv = save_curves_csv(save_dir, base_name="full", hist=hist)
+        print(f"Saved training curves: {train_csv}")
+        if eval_csv is not None:
+            print(f"Saved eval curves: {eval_csv}")
+
+        # ---- optional plots ----
+        if SAVE_PLOTS:
+            plot_series(hist["policy_loss"], "Policy Loss", save_path=(plot_dir / "policy_loss.png"))
+            plot_series(hist["value_loss"], "Value Loss", save_path=(plot_dir / "value_loss.png"))
+            plot_series(hist["avg_return"], "Average Return", save_path=(plot_dir / "avg_return.png"))
+            if hist["mse_eval"]:
+                plot_series(hist["mse_eval"], "Eval MSE", x=hist["iter_eval"], save_path=(plot_dir / "mse_eval.png"))
 
         mse, acc = evaluate_mse(env_eval, agent, scaler)
         print(f"[FULL] Final MSE={mse:.6f}  sign-acc={acc:.4f}")
         torch.save(agent.model.state_dict(), str(save_dir / "ppo_full.pt"))
         print(f"Saved weights: {save_dir / 'ppo_full.pt'}")
+
+        # Save run artifacts (config, scaler, feature order)
+        save_training_artifacts(
+            save_dir=save_dir,
+            agent=agent,
+            cfg=agent.cfg,
+            scaler=scaler,
+            df=full_df,
+            feature_cols=FEATURE_COLS,
+            extra={"k_folds": K_FOLDS, "iters": ITERS, "epochs": EPOCHS}
+        )
+        print(f"Saved training artifacts: {save_dir / 'run_config.json'}, {save_dir / 'scaler.joblib'}")
         return
 
-    # K-fold, training histories per fold (optional: add aggregate plotting)
+    # ---------- K-fold ----------
     n = len(full_df)
     folds = forward_chaining_folds(n, K_FOLDS)
     mses: List[float] = []
     accs: List[float] = []
+    last_agent: Optional[PPOAgent] = None
 
     for fold_id, (tr, va) in enumerate(folds, start=1):
         df_tr = full_df.iloc[tr].reset_index(drop=True)
@@ -356,16 +406,20 @@ def main() -> None:
         env_eval = Environment(df_va, "target", FEATURE_COLS, reward=SimpleSignReward(THRESHOLD))
         agent, _, hist = train_on_dataframe(df_tr, fold_tag=f"FOLD_{fold_id}", eval_env=env_eval, scaler=scaler)
 
-        # Per-fold plots
-        plot_series(hist["policy_loss"], f"Policy Loss (Fold {fold_id})",
-                    save_path=(plot_dir / f"policy_loss_fold{fold_id}.png" if SAVE_PLOTS else None))
-        plot_series(hist["value_loss"], f"Value Loss (Fold {fold_id})",
-                    save_path=(plot_dir / f"value_loss_fold{fold_id}.png" if SAVE_PLOTS else None))
-        plot_series(hist["avg_return"], f"Average Return (Fold {fold_id})",
-                    save_path=(plot_dir / f"avg_return_fold{fold_id}.png" if SAVE_PLOTS else None))
-        if hist["mse_eval"]:
-            plot_series(hist["mse_eval"], f"Eval MSE (Fold {fold_id})", x=hist["iter_eval"],
-                        save_path=(plot_dir / f"mse_eval_fold{fold_id}.png" if SAVE_PLOTS else None))
+        # Save CSV curves per fold
+        train_csv, eval_csv = save_curves_csv(save_dir, base_name=f"fold{fold_id}", hist=hist)
+        print(f"[FOLD {fold_id}] Saved training curves: {train_csv}")
+        if eval_csv is not None:
+            print(f"[FOLD {fold_id}] Saved eval curves: {eval_csv}")
+
+        # Optional plots
+        if SAVE_PLOTS:
+            plot_series(hist["policy_loss"], f"Policy Loss (Fold {fold_id})", save_path=(plot_dir / f"policy_loss_fold{fold_id}.png"))
+            plot_series(hist["value_loss"], f"Value Loss (Fold {fold_id})", save_path=(plot_dir / f"value_loss_fold{fold_id}.png"))
+            plot_series(hist["avg_return"], f"Average Return (Fold {fold_id})", save_path=(plot_dir / f"avg_return_fold{fold_id}.png"))
+            if hist["mse_eval"]:
+                plot_series(hist["mse_eval"], f"Eval MSE (Fold {fold_id})", x=hist["iter_eval"],
+                            save_path=(plot_dir / f"mse_eval_fold{fold_id}.png"))
 
         mse, acc = evaluate_mse(env_eval, agent, scaler)
         mses.append(mse); accs.append(acc)
@@ -374,17 +428,17 @@ def main() -> None:
         out_path = save_dir / f"ppo_fold{fold_id}.pt"
         torch.save(agent.model.state_dict(), str(out_path))
         print(f"Saved weights: {out_path}")
+        last_agent = agent
 
     print(f"[CV] mean MSE={np.mean(mses):.6f}  std={np.std(mses):.6f} | mean sign-acc={np.mean(accs):.4f}")
-    # after:
-    torch.save(agent.model.state_dict(), str(save_dir / "ppo_full.pt"))
+    torch.save(last_agent.model.state_dict(), str(save_dir / "ppo_full.pt"))
     print(f"Saved weights: {save_dir / 'ppo_full.pt'}")
 
-    # NEW: save config + scaler + feature order
+    # Save run artifacts
     save_training_artifacts(
         save_dir=save_dir,
-        agent=agent,
-        cfg=cfg,                # <-- pass the PPOConfig you used to build the agent
+        agent=last_agent,
+        cfg=last_agent.cfg,
         scaler=scaler,
         df=full_df,
         feature_cols=FEATURE_COLS,

@@ -111,25 +111,27 @@ using the pre-processed data provided by Hull Tactical.
 
 \section{Related Work}
 
-Here, talk about the related work you encountered for your approach. Cite at least 5 references. Refer to item 2. No one has done exactly your task? Write about the most similar thing you can find. This should be around 0.25-0.5 pages.
+Predicting stock prices in an unsupervised manner is more naturally framed as a sequential
+decision-making problem rather than a static supervised regression task. In this context,
+reinforcement learning (RL), and in particular the algorithm Proximal Policy Optimisation
+(PPO) \citep{Schulman2017}, offers a compelling framework. PPO is an on-policy actor–critic
+method that stabilises policy updates by clipping its surrogate objective, thereby limiting
+destabilising policy shifts in non-stationary, noisy environments such as financial markets.
 
+Adaptive trading strategies using deep RL have been applied to portfolio management. For example,
+Huang et al.\ \citep{Huang2020} apply deep reinforcement learning to portfolio allocation,
+including short-selling and arbitrage in continuous action spaces, showing that RL agents can
+outperform benchmarks in equity markets. Jiang et al.\ \citep{Jiang2024} propose a model-free
+DRL framework for portfolio selection under dynamic market complexity, demonstrating improved
+performance in large-scale asset settings. On the risk-management front, Lam et al.\ \citep{Lam2023}
+develop a unified risk-aware RL framework that uses coherent risk measures with non-linear
+function approximation, delivering regret bounds in risk-constrained trading scenarios. Finally,
+Soleymani \& Paquet \citep{Soleymani2021} introduce a graph-convolutional RL architecture (DeepPocket)
+that models inter-asset correlations for portfolio optimisation and shows strong empirical performance.
 
-What is a good approach to predict stock prices with unsuprivised machine learning techniques?
-Instinctively, reinforcement learning especially Proximal Policy Optimization (PPO)
-seems to be the best fit for this task.[1]
-PPO is an on-policy actor-critic method that maximizes a clipped surrogate objective 
-to prevent destabilizing policy updates. In markets, this is attractive because 
-the reward feedback comes from interaction (PnL, risk-adjusted returns), not 
-labeled targets—i.e., the problem is effectively label-free. Second, the environment is 
-non-stationary and noisy, so conservative trust-region-like updates (PPO’s clipping) 
-curb policy collapse. At last, PPO pairs naturally with recurrent encoders (e.g., GRU) 
-and risk-aware rewards (e.g., Sortino ratio) already shown effective in GDQN/GDPG-style systems.[2]
-
-How do we measure risk-adjusted returns? The most common way is to use the Sharpe ratio. The 
-Sharpe ratio is a good indicator for most of the investment strategies. However, in the case of 
-reinforcement learning based trading strategy, it is not enough. The biggest risk of such trading
-strategy is the non-deterministic nature of a neural netowrk. Thus, careful selection of a neural
-network architecture is important to reduce the variance of the returns.
+Together, these studies underscore that combining PPO-style policy optimisation, temporal or graph
+encoders (e.g., recurrent nets or GCNs), and risk-adjusted reward functions offers a promising
+unsupervised framework for stock prediction and trading-policy development.
 
 
 
@@ -144,17 +146,40 @@ distribution, nor did it require changes to our modeling pipeline, since our
 learning framework does not rely on absolute scale but rather on relative  
 directional signals.
 
-Each row in the dataset corresponds to a single market snapshot at time $t$ for  
-a specific equity, containing both price-derived technical indicators and  
-macroeconomic or market-level descriptors. The prediction target is  
-\texttt{forward\_returns}, the realized percentage change in the security price  
-from $t$ to $t + \Delta$, where $\Delta$ is defined by the dataset provider.  
-In our processing, we rename this column to \texttt{target} for consistency.
+The dataset consist of 8 different feature groups. 
+These feature groups are:
+\begin{itemize}
+  \item M* Market Dynamics/Technical features. 
+  \item E* Macro Economic features.
+  \item I* Interest Rate features.
+  \item P* Price/Valuation features.
+  \item V* Volatility features.
+  \item S* Sentiment features. 
+  \item MOM* Momentum features.
+  \item D* Dummy/Binary features.
+\end{itemize}
+For example, a feature related to Price/Valueation will be denoted as column V1,
+V2, etc.
 
-As expected in financial forecasting problems, the empirical distribution of  
-\texttt{target} is highly concentrated around zero, with heavy tails and high  
-kurtosis. This reflects the structural difficulty of short-horizon return  
-prediction, where most price movements are dominated by noise.
+Some analysis are ran on the dataset to understand the basic nature of the data.
+\begin{figure}
+  \centering
+  \includegraphics[width=0.7\columnwidth]{plots/DvsT.png}
+  \caption{relationship between binary and target}
+  \label{fig:target_hist}
+\end{figure}
+\begin{figure}
+  \centering
+  \includegraphics[width=0.7\columnwidth]{plots/top_corr.png}
+  \caption{distribution of target variable}
+  \label{fig:target_hist}
+\end{figure}
+
+From observing Figure 1 and Figure 2, as expected in financial forecasting problems, 
+the empirical distribution of features and target is extremely noisy and return is distributed closely to zero. 
+Features released are all have a weak to no visible relationship with the target variable. 
+Therefore, when training, we normalize the target variable to have zero mean and unit variance which 
+make sure the loss will not diminish during backward propagation.
 
 The dataset also contains missing values, particularly in indicators  
 constructed from rolling windows of different lengths. To avoid discarding  
@@ -183,14 +208,15 @@ No manual feature engineering was performed beyond:
           \texttt{NaN}-carrying columns.
     \item Optional inclusion of a constant bias term during reinforcement
           learning.
+    \item Optional removal of values too small in magnitude to reduce noise.
 \end{itemize}
 
 Because financial features often exhibit collinearity, we conducted correlation  
 inspections to assess which features carry directional information relative to  
-\texttt{target}. Point-biserial and Pearson correlations were used for this  
-purpose. In the reinforcement learning setting, the environment returns a state  
-vector consisting of the normalized feature vector at time step $t$, optionally  
-concatenated with the agent's previous action to preserve position memory.
+\texttt{target}. However, no workable linear correlation found in this dataset. 
+The processed data is feeded to an reinforcement learning environment to generate 
+state frames, then the agent will learn based on the rewards from the 
+reinforcement learning environment. 
 
 \vspace{6pt}
 \section{Implementation}
@@ -208,15 +234,36 @@ representing \texttt{sell}, \texttt{hold}, or \texttt{buy} decisions.
 
 We define a custom environment that sequentially feeds feature vectors over  
 time. The reward reflects directional correctness rather than magnitude:
-\[
-r_t = \mathbb{1}(\text{sign}(a_t) = \text{sign}(\text{target}_t)) -
-      \mathbb{1}(\text{sign}(a_t) \neq \text{sign}(\text{target}_t))
-\]
-This converts return prediction into directional prediction, which is more  
-robust for noisy financial data.
+Below are 2 different reward function implementation we experimented with:
+\begin{itemize}
+    \item \textbf{Simple directional reward:}
+    \[
+        r_t = a_t \cdot \Delta p_t
+    \]
+    where $a_t \in \{-1, +1\}$ is the action (sell / buy) and $\Delta p_t$ is the price change.
+    \item \textbf{Risk-adjusted directional reward:}
+    \[
+        r_t = a_t \cdot \Delta p_t - \mathrm{sign}(x, \Delta p_t) 
+    \]
+    where $\mathrm{sign}(x, y)$ is defined as:
+      \[
+      \mathrm{sign}(x, y) =
+      \begin{cases}
+      \Lambda x, & \text{if } x \cdot y < 0,\\[6pt]
+      0, & \text{otherwise.}
+      \end{cases}
+      \]
+\end{itemize}
+
+Currently we are still not satisfy with the reward function that we are currently using
+since it does not consider Sharpe ratio, trading cost on switching sides, and other risk 
+factors. We also want to encourage the model to make more sell decision rather than hold
+or buy since the market is more tilted towards a bullish trend, and its ability to spot 
+dips in the market is more valuable. We are actively working on
+design and test different reward functions to improve both return and risk of model 
+strategy. 
 
 \subsection{Policy and Value Networks}
-
 The agent maintains:
 \begin{itemize}
     \item A policy network $\pi_\theta(a_t | s_t)$ producing action probabilities.
@@ -230,6 +277,7 @@ L_{\pi} = -\mathbb{E}\left[\min(r_t(\theta)\hat{A}_t,
 \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t)\right]
 \]
 The value network is trained via mean-squared error against return-to-go.
+In Future we will explore LSTM related architecture to enhance performance. 
 
 \subsection{Training Procedure}
 
@@ -254,94 +302,92 @@ supervised models:
 \end{itemize}
 
 These baselines help evaluate whether reward-based directional optimization  
-provides an advantage over direct regression on \texttt{target}.
+provides an advantage over direct regression on target. 
 
 \section{Results and Evaluation}
 
-How are you evaluating your model? What results do you have so far? What are your baselines? Refer to item 5. This may take around 0.5 pages.
+As showm in Figure~\ref{fig:policy_loss},
+\begin{figure}
+  \centering
+  \includegraphics[width=0.7\columnwidth]{plots/policy_loss.png}
+  \caption{PPO policy loss over training iterations}
+  \label{fig:policy_loss}
+\end{figure}
+This is trained with batch size of 128, which is considered to be a small batch size.
+In this setup, sign accuracy reach 53.93\% and MSE of 0.356282. 
+The MSE is here is calculated against normalized target variable.
+Finally, we observe the policy loss converge after 100 iterations. 
+
+It is also observed with our latest experiment that 
+with a large batch size 3000, the policy loss converge slower, with better results. 
+However, we accidentally deleted the log file for that experiement therefore we can not 
+show the plot here. 
+
+Unfortunately, the training process of the best model is not documented. We are unable 
+to retrain before the end of this report it because the time constraint and GPU resource limitation.
+
+But we are still able to measure our best model performance against the baselines. 
+\begin{figure}
+  \centering
+  \includegraphics[width=0.7\columnwidth]{plots/best_return.png}
+  \caption{Model performance comparison}
+  \label{fig:performance_best}
+\end{figure}
+
+\begin{figure}
+  \centering
+  \includegraphics[width=0.7\columnwidth]{plots/baselines.png}
+  \caption{Baseline model performance comparison}
+  \label{fig:performance_base}
+\end{figure}
+
+Our baseline is two small MLPs regression and one gradient boosted tree model.
+
+We understand one of the biggest drawback of implementing deep learning methods into 
+financial market prediction is the inconsistency of the results and low explainability which
+leads to high risk. We see our best model is outperforming the baselines by a large margin but, 
+the performance is not consistant. Since the best model is ran on the same datapoint over a long period of time, 
+although the model is relavantly small, we believe the finding may still not be valid. A good 
+result would be a consistant outperformance over the expected return over all time periods with 
+a relevantly small model. 
 
 \section{Feedback and Plans}
 
-Write about your plans for the remainder of the project. This should include a discussion of the feedback you received from your TA, and how you plan to improve your approach. Reflect on your implementation and areas for improvement. Refer to item 6. This may be around 0.5 pages.
 
-\section{Template Notes}
+\begin{itemize}
+  \item Improve the reward function by incorporating risk-adjusted returns 
+        (e.g., Sharpe ratio), trading costs, and additional risk controls.
+  \item Experiment with different neural network architectures such as 
+        p-sLSTM and GRU to improve agent performance.
+  \item Implement parallel rollout environments to accelerate training.
+  \item Complete the evaluation pipeline for more systematic analysis and visualization.
+\end{itemize}
 
-You can remove this section or comment it out, as it only contains instructions for how to use this template. You may use subsections in your document as you find appropriate.
-
-\subsection{Tables and figures}
-
-See Table~\ref{citation-guide} for an example of a table and its caption.
-See Figure~\ref{fig:experiments} for an example of a figure and its caption.
-
-
-\begin{figure}[t]
-  \includegraphics[width=\columnwidth]{example-image-golden}
-  \caption{A figure with a caption that runs for more than one line.
-    Example image is usually available through the \texttt{mwe} package
-    without even mentioning it in the preamble.}
-  \label{fig:experiments}
-\end{figure}
-
-\begin{figure*}[t]
-  \includegraphics[width=0.48\linewidth]{example-image-a} \hfill
-  \includegraphics[width=0.48\linewidth]{example-image-b}
-  \caption {A minimal working example to demonstrate how to place
-    two images side-by-side.}
-\end{figure*}
-
+The TA's feedback emphasized the noisy nature of financial time series data 
+and the inherent difficulty of price prediction. In response, we designed a 
+careful preprocessing pipeline to stabilize the data and ensure that the model 
+receives consistent and meaningful input features. We also revised our reward 
+function to be more robust to noise and large adverse movements in price.
+In future
 
 \subsection{Citations}
 
-\begin{table*}
-  \centering
-  \begin{tabular}{lll}
-    \hline
-    \textbf{Output}           & \textbf{natbib command} & \textbf{ACL only command} \\
-    \hline
-    \citep{Gusfield:97}       & \verb|\citep|           &                           \\
-    \citealp{Gusfield:97}     & \verb|\citealp|         &                           \\
-    \citet{Gusfield:97}       & \verb|\citet|           &                           \\
-    \citeyearpar{Gusfield:97} & \verb|\citeyearpar|     &                           \\
-    \citeposs{Gusfield:97}    &                         & \verb|\citeposs|          \\
-    \hline
-  \end{tabular}
-  \caption{\label{citation-guide}
-    Citation commands supported by the style file.
-  }
-\end{table*}
-
-Table~\ref{citation-guide} shows the syntax supported by the style files.
-We encourage you to use the natbib styles.
-You can use the command \verb|\citet| (cite in text) to get ``author (year)'' citations, like this citation to a paper by \citet{Gusfield:97}.
-You can use the command \verb|\citep| (cite in parentheses) to get ``(author, year)'' citations \citep{Gusfield:97}.
-You can use the command \verb|\citealp| (alternative cite without parentheses) to get ``author, year'' citations, which is useful for using citations within parentheses (e.g. \citealp{Gusfield:97}).
-
 \subsection{References}
 
-\nocite{Ando2005,andrew2007scalable,rasooli-tetrault-2015}
-
-Many websites where you can find academic papers also allow you to export a bib file for citation or bib formatted entry. Copy this into the \texttt{custom.bib} and you will be able to cite the paper in the \LaTeX{}. You can remove the example entries.
-
-\subsection{Equations}
-
-An example equation is shown below:
-\begin{equation}
-  \label{eq:example}
-  A = \pi r^2
-\end{equation}
-
-Labels for equation numbers, sections, subsections, figures and tables
-are all defined with the \verb|\label{label}| command and cross references
-to them are made with the \verb|\ref{label}| command.
-This an example cross-reference to Equation~\ref{eq:example}. You can also write equations inline, like this: $A=\pi r^2$.
-
+\nocite{}
 
 % \section*{Limitations}
 
 \section*{Team Contributions}
 
-Write in this section a few sentences describing the contributions of each team member. What did each member work on? Refer to item 7.
-
+All teammates are involved in training models and
+contributed evenly to the project. There is no clear
+division of labor since all members are capable
+of doing all tasks, and we all did do the tasks to-
+gether. All team members participated in weekly
+brainstorm meetings, discussed ideas. All team
+members contributed to algorithm deisgn, imple-
+mentation, training, and evaluation.
 % Bibliography entries for the entire Anthology, followed by custom entries
 %\bibliography{custom,anthology-overleaf-1,anthology-overleaf-2}
 
