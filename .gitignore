@@ -20,3 +20,5 @@ checkpoints/ppo_full.pt
 *.pt
 result/
 *.zip
+checkpoints/
+plots/

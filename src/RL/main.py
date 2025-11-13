@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 import os
 import json
+import argparse
 
 import numpy as np
 import pandas as pd
@@ -16,41 +17,104 @@ from agent import PPOAgent, PPOConfig
 from sklearn.preprocessing import StandardScaler
 import joblib
 
+
 # =========================
-# CONFIG (edit here)
+# Central config
 # =========================
-DATA_PATH: str = r"data/train.csv"  # set me
-TARGET_COL: str = "forward_returns"       # will be renamed to 'target'
-FEATURE_COLS: Optional[List[str]] = None  # None => all except target
-DEVICE: str = "cuda"                      # "cuda" or "cpu"
-INCLUDE_BIAS: bool = False
-THRESHOLD: float = 0.0
+@dataclass
+class TrainConfig:
+    # Data / features
+    data_path: str = r"C:\Year4\4AL3\final-project\4AL3\src\RL\data\train.csv"
+    target_col: str = "forward_returns"
+    feature_cols: Optional[List[str]] = None  # None => all except target
 
-# Saving
-SAVE_DIR: str = r"checkpoints"
-SAVE_EVERY: int = 50
+    # Device / env
+    device: str = "cuda"          # "cuda" or "cpu"
+    include_bias: bool = False
+    threshold: float = 0.0        # reward threshold
 
-# PPO / Training
-ITERS: int = 300
-EPOCHS: int = 5
-BATCH_SIZE: int = 128
-MINIBATCH: int = 32
-LR: float = 3e-4
-CLIP: float = 0.2
-GAMMA: float = 0.99
-LAMBDA_GAE: float = 0.95
-ENTROPY_COEF: float = 0.01
-VALUE_COEF: float = 0.5
-MAX_GRAD_NORM: float = 0.5
-L2_LAMBDA: float = 1e-4
+    # Saving
+    save_dir: str = "checkpoints"
+    save_every: int = 100          # save model every N iterations
 
-# Cross-validation / Eval
-K_FOLDS: int = 1
-EVAL_EVERY: int = 100     # Evaluate MSE/accuracy every this many iterations
+    # PPO / Training
+    iters: int = 300
+    epochs: int = 5
+    batch_size: int = 3000
+    minibatch_size: int = 300
+    lr: float = 3e-4
+    clip_eps: float = 0.2
+    gamma: float = 0.99
+    lam: float = 0.95
+    entropy_coef: float = 0.01
+    value_coef: float = 0.5
+    max_grad_norm: float = 0.5
+    l2_lambda: float = 1e-4
 
-# Plot saving (optional)
-PLOT_DIR: str = "./plots"
-SAVE_PLOTS: bool = True
+    # Cross-validation / Eval
+    k_folds: int = 5
+    eval_every: int = 100         # evaluate MSE/accuracy every N iterations
+
+    # Plot saving (optional)
+    plot_dir: str = "./plots"
+    save_plots: bool = True
+
+
+# =========================
+# Argparse → TrainConfig
+# =========================
+def parse_args() -> TrainConfig:
+    default = TrainConfig()
+
+    p = argparse.ArgumentParser(description="PPO stock prediction training")
+
+    # Data
+    p.add_argument("--data-path", type=str, default=default.data_path)
+    p.add_argument("--target-col", type=str, default=default.target_col)
+    p.add_argument("--feature-cols", type=str, nargs="*", default=None)
+
+    # Device / env
+    p.add_argument("--device", type=str, default=default.device, choices=["cuda", "cpu"])
+    p.add_argument("--include-bias", action="store_true", default=default.include_bias)
+    p.add_argument("--threshold", type=float, default=default.threshold)
+
+    # Saving
+    p.add_argument("--save-dir", type=str, default=default.save_dir)
+    p.add_argument("--save-every", type=int, default=default.save_every)
+
+    # PPO / Training
+    p.add_argument("--iters", type=int, default=default.iters)
+    p.add_argument("--epochs", type=int, default=default.epochs)
+    p.add_argument("--batch-size", type=int, default=default.batch_size)
+    p.add_argument("--minibatch-size", type=int, default=default.minibatch_size)
+    p.add_argument("--lr", type=float, default=default.lr)
+    p.add_argument("--clip-eps", type=float, default=default.clip_eps)
+    p.add_argument("--gamma", type=float, default=default.gamma)
+    p.add_argument("--lam", type=float, default=default.lam)
+    p.add_argument("--entropy-coef", type=float, default=default.entropy_coef)
+    p.add_argument("--value-coef", type=float, default=default.value_coef)
+    p.add_argument("--max-grad-norm", type=float, default=default.max_grad_norm)
+    p.add_argument("--l2-lambda", type=float, default=default.l2_lambda)
+
+    # CV / Eval
+    p.add_argument("--k-folds", type=int, default=default.k_folds)
+    p.add_argument("--eval-every", type=int, default=default.eval_every)
+
+    # Plots
+    p.add_argument("--plot-dir", type=str, default=default.plot_dir)
+    p.add_argument("--no-save-plots", action="store_true", help="Disable saving plots")
+
+    args = p.parse_args()
+    cfg_dict = vars(args)
+
+    # feature-cols: None or list
+    cfg_dict["feature_cols"] = cfg_dict.pop("feature_cols")
+
+    # save_plots is inverse of --no-save-plots
+    cfg_dict["save_plots"] = not cfg_dict.pop("no_save_plots")
+
+    return TrainConfig(**cfg_dict)
+
 
 # =========================
 # Data utilities
@@ -63,8 +127,9 @@ def add_missing_flags_and_zero_fill(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].fillna(0.0)
     return df
 
-def load_data(path: str | Path, target: str = TARGET_COL) -> Tuple[pd.DataFrame, StandardScaler]:
-    path = Path(path)
+
+def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame, StandardScaler]:
+    path = Path(cfg.data_path)
     if path.suffix.lower() in {".parquet", ".pq"}:
         df = pd.read_parquet(path)
     else:
@@ -74,48 +139,59 @@ def load_data(path: str | Path, target: str = TARGET_COL) -> Tuple[pd.DataFrame,
             df = pd.read_csv(path)
 
     df.columns = df.columns.str.strip()
-    if target not in df.columns:
-        raise ValueError(f"Target column '{target}' not found. Available: {list(df.columns)[:10]} ...")
+    if cfg.target_col not in df.columns:
+        raise ValueError(
+            f"Target column '{cfg.target_col}' not found. "
+            f"Available: {list(df.columns)[:10]} ..."
+        )
 
-    df = df.rename(columns={target: "target"})
+    df = df.rename(columns={cfg.target_col: "target"})
 
     # drop leakage/irrelevant columns if present
-    to_drop = [c for c in df.columns if ("market_forward_excess_returns" in c) or ("risk_free_rate" in c)]
+    to_drop = [c for c in df.columns
+               if ("market_forward_excess_returns" in c) or ("risk_free_rate" in c)]
     if to_drop:
         df = df.drop(columns=to_drop)
 
     df = add_missing_flags_and_zero_fill(df)
 
-    # Normalize features
-    feature_cols = FEATURE_COLS if FEATURE_COLS is not None else [c for c in df.columns if c != "target"]
+    feature_cols = cfg.feature_cols if cfg.feature_cols is not None else [
+        c for c in df.columns if c != "target"
+    ]
     scaler = StandardScaler()
     df[feature_cols] = scaler.fit_transform(df[feature_cols])
 
+    df = df.copy(deep=True)
     return df, scaler
 
+
 def save_training_artifacts(
+    cfg: TrainConfig,
     save_dir: Path,
     agent: PPOAgent,
-    cfg: PPOConfig,
+    ppo_cfg: PPOConfig,
     scaler: StandardScaler,
     df: pd.DataFrame,
-    feature_cols: Optional[List[str]],
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     save_dir.mkdir(parents=True, exist_ok=True)
-    resolved_features = feature_cols if feature_cols is not None else [c for c in df.columns if c != "target"]
+    resolved_features = (
+        cfg.feature_cols
+        if cfg.feature_cols is not None
+        else [c for c in df.columns if c != "target"]
+    )
 
     run_cfg = {
-        "ppo_config": asdict(cfg),
+        "ppo_config": asdict(ppo_cfg),
         "obs_dim": int(agent.model.shared[0].in_features),  # derived
         "n_actions": 3,
         "device": str(agent.device),
-        "include_bias": bool(INCLUDE_BIAS),
-        "threshold": float(THRESHOLD),
+        "include_bias": bool(cfg.include_bias),
+        "threshold": float(cfg.threshold),
         "target_col": "target",
         "feature_cols": resolved_features,
         "columns_in_dataframe": list(df.columns),
-        "data_path": str(DATA_PATH),
+        "data_path": str(cfg.data_path),
         "env_meta": extra or {},
     }
 
@@ -123,12 +199,21 @@ def save_training_artifacts(
         json.dump(run_cfg, f, indent=2)
 
     joblib.dump(scaler, save_dir / "scaler.joblib")
-    pd.Series(resolved_features, name="feature_cols").to_csv(save_dir / "feature_cols.csv", index=False)
+    pd.Series(resolved_features, name="feature_cols").to_csv(
+        save_dir / "feature_cols.csv", index=False
+    )
+
 
 # =========================
 # PPO rollout
 # =========================
-def rollout(env: Environment, agent: PPOAgent, steps: int, gamma: float, lam: float) -> Dict[str, np.ndarray]:
+def rollout(
+    env: Environment,
+    agent: PPOAgent,
+    steps: int,
+    gamma: float,
+    lam: float,
+) -> Dict[str, np.ndarray]:
     obs_buf, act_buf, logp_buf, rew_buf, val_buf, done_buf = [], [], [], [], [], []
     obs = env.reset()
     for _ in range(steps):
@@ -167,6 +252,7 @@ def rollout(env: Environment, agent: PPOAgent, steps: int, gamma: float, lam: fl
 
     return {"obs": obs_arr, "acts": acts_arr, "logp": logp_arr, "adv": adv, "ret": ret}
 
+
 # =========================
 # Evaluation (deterministic)
 # =========================
@@ -204,6 +290,7 @@ def evaluate_mse(env: Environment, agent: PPOAgent, scaler: StandardScaler) -> T
     acc = float(np.mean(np.sign(y_pred_arr) == np.sign(y_true_arr)))
     return mse, acc
 
+
 # =========================
 # Utilities
 # =========================
@@ -211,6 +298,7 @@ def ensure_dir(path: str | Path) -> Path:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
 
 def save_curves_csv(
     save_dir: Path,
@@ -247,28 +335,31 @@ def save_curves_csv(
 
     return train_csv, eval_csv_path
 
+
 def train_on_dataframe(
+    cfg: TrainConfig,
     df: pd.DataFrame,
     fold_tag: str,
-    verbose: int = 150,
+    verbose: int = 1,
     eval_env: Optional[Environment] = None,
     scaler: Optional[StandardScaler] = None
 ) -> Tuple[PPOAgent, Dict[str, float], Dict[str, List[float]]]:
 
-    device = "cuda" if (DEVICE == "cuda" and torch.cuda.is_available()) else "cpu"
+    device = "cuda" if (cfg.device == "cuda" and torch.cuda.is_available()) else "cpu"
     env = Environment(
         data=df,
         target_col="target",
-        feature_cols=FEATURE_COLS,
-        reward=SimpleSignReward(threshold=THRESHOLD),
-        include_bias=INCLUDE_BIAS,
+        feature_cols=cfg.feature_cols,
+        reward=SimpleSignReward(threshold=cfg.threshold),
+        include_bias=cfg.include_bias,
     )
-    cfg = PPOConfig(
-        gamma=GAMMA, lam=LAMBDA_GAE, clip_eps=CLIP, lr=LR, epochs=EPOCHS,
-        batch_size=BATCH_SIZE, minibatch_size=MINIBATCH, entropy_coef=ENTROPY_COEF,
-        value_coef=VALUE_COEF, max_grad_norm=MAX_GRAD_NORM, l2_lambda=L2_LAMBDA,
+    ppo_cfg = PPOConfig(
+        gamma=cfg.gamma, lam=cfg.lam, clip_eps=cfg.clip_eps, lr=cfg.lr,
+        epochs=cfg.epochs, batch_size=cfg.batch_size, minibatch_size=cfg.minibatch_size,
+        entropy_coef=cfg.entropy_coef, value_coef=cfg.value_coef,
+        max_grad_norm=cfg.max_grad_norm, l2_lambda=cfg.l2_lambda,
     )
-    agent = PPOAgent(obs_dim=env.obs_dim, n_actions=3, device=device, cfg=cfg)
+    agent = PPOAgent(obs_dim=env.obs_dim, n_actions=3, device=device, cfg=ppo_cfg)
 
     # ---- history trackers ----
     hist = {
@@ -276,13 +367,13 @@ def train_on_dataframe(
         "value_loss": [],
         "entropy": [],
         "avg_return": [],
-        "mse_eval": [],     # recorded every EVAL_EVERY
+        "mse_eval": [],     # recorded every cfg.eval_every
         "acc_eval": [],
         "iter_eval": []
     }
 
-    for it in range(ITERS):
-        buf = rollout(env, agent, steps=cfg.batch_size, gamma=cfg.gamma, lam=cfg.lam)
+    for it in range(cfg.iters):
+        buf = rollout(env, agent, steps=ppo_cfg.batch_size, gamma=ppo_cfg.gamma, lam=ppo_cfg.lam)
         stats = agent.update(buf)
         avg_ret = float(buf["ret"].mean())
 
@@ -293,12 +384,14 @@ def train_on_dataframe(
         hist["avg_return"].append(avg_ret)
 
         if (it + 1) % verbose == 0:
-            print(f"[{fold_tag}] Iter {it+1}/{ITERS} | AvgReturn: {avg_ret:.4f} | "
-                  f"PolicyLoss: {stats['policy_loss']:.4f} | ValueLoss: {stats['value_loss']:.4f} | "
-                  f"Entropy: {stats['entropy']:.4f}")
+            print(
+                f"[{fold_tag}] Iter {it+1}/{cfg.iters} | AvgReturn: {avg_ret:.4f} | "
+                f"PolicyLoss: {stats['policy_loss']:.4f} | ValueLoss: {stats['value_loss']:.4f} | "
+                f"Entropy: {stats['entropy']:.4f}"
+            )
 
         # periodic eval MSE & sign-accuracy
-        if eval_env is not None and scaler is not None and (it + 1) % EVAL_EVERY == 0:
+        if eval_env is not None and scaler is not None and (it + 1) % cfg.eval_every == 0:
             mse, acc = evaluate_mse(eval_env, agent, scaler)
             hist["mse_eval"].append(mse)
             hist["acc_eval"].append(acc)
@@ -306,11 +399,15 @@ def train_on_dataframe(
             print(f"[{fold_tag}] Eval at Iter {it+1}: MSE={mse:.6f} | sign-acc={acc:.4f}")
 
         # periodic save
-        if (it + 1) % SAVE_EVERY == 0:
-            ensure_dir(SAVE_DIR)
-            torch.save(agent.model.state_dict(), str(Path(SAVE_DIR) / f"ppo_{fold_tag.replace(' ', '_').lower()}_iter{it+1}.pt"))
+        if (it + 1) % cfg.save_every == 0:
+            save_dir = ensure_dir(cfg.save_dir)
+            torch.save(
+                agent.model.state_dict(),
+                str(Path(save_dir) / f"ppo_{fold_tag.replace(' ', '_').lower()}_iter{it+1}.pt")
+            )
 
     return agent, stats, hist
+
 
 def forward_chaining_folds(n: int, k: int) -> List[Tuple[np.ndarray, np.ndarray]]:
     folds: List[Tuple[np.ndarray, np.ndarray]] = []
@@ -328,10 +425,17 @@ def forward_chaining_folds(n: int, k: int) -> List[Tuple[np.ndarray, np.ndarray]
         folds.append((np.arange(0, cut), np.arange(cut, n)))
     return folds
 
+
 # =========================
 # Plot helpers (optional)
 # =========================
-def plot_series(y: List[float], title: str, x: Optional[List[int]] = None, save_path: Optional[Path] = None):
+def plot_series(
+    cfg: TrainConfig,
+    y: List[float],
+    title: str,
+    x: Optional[List[int]] = None,
+    save_name: Optional[str] = None,
+):
     if x is None:
         x = list(range(1, len(y) + 1))
     plt.figure()
@@ -340,25 +444,45 @@ def plot_series(y: List[float], title: str, x: Optional[List[int]] = None, save_
     plt.xlabel("Iteration")
     plt.ylabel(title)
     plt.grid(True, alpha=0.3)
-    if save_path is not None:
+    if cfg.save_plots and save_name is not None:
+        save_path = Path(cfg.plot_dir) / save_name
         save_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(save_path, bbox_inches="tight")
     plt.show()
+
 
 # =========================
 # Main
 # =========================
 def main() -> None:
-    save_dir = ensure_dir(SAVE_DIR)
-    plot_dir = ensure_dir(PLOT_DIR) if SAVE_PLOTS else Path(PLOT_DIR)
-    device = "cuda" if (DEVICE == "cuda" and torch.cuda.is_available()) else "cpu"
+    cfg = parse_args()
+
+    save_dir = ensure_dir(cfg.save_dir)
+    if cfg.save_plots:
+        ensure_dir(cfg.plot_dir)
+
+    device = "cuda" if (cfg.device == "cuda" and torch.cuda.is_available()) else "cpu"
     print(f"Using device: {device} | Saving to: {save_dir}")
+    print(f"Config: {cfg}")
 
-    full_df, scaler = load_data(DATA_PATH, target=TARGET_COL)
+    full_df, scaler = load_data(cfg)
 
-    if K_FOLDS <= 1:
-        env_eval = Environment(full_df, "target", FEATURE_COLS, reward=SimpleSignReward(THRESHOLD))
-        agent, _, hist = train_on_dataframe(full_df, fold_tag="FULL", eval_env=env_eval, scaler=scaler)
+    # ----- single run -----
+    if cfg.k_folds <= 1:
+        env_eval = Environment(
+            full_df,
+            "target",
+            cfg.feature_cols,
+            reward=SimpleSignReward(cfg.threshold),
+            include_bias=cfg.include_bias,
+        )
+        agent, _, hist = train_on_dataframe(
+            cfg,
+            full_df,
+            fold_tag="FULL",
+            eval_env=env_eval,
+            scaler=scaler,
+        )
 
         # ---- CSV curves (saved alongside checkpoints) ----
         train_csv, eval_csv = save_curves_csv(save_dir, base_name="full", hist=hist)
@@ -367,12 +491,18 @@ def main() -> None:
             print(f"Saved eval curves: {eval_csv}")
 
         # ---- optional plots ----
-        if SAVE_PLOTS:
-            plot_series(hist["policy_loss"], "Policy Loss", save_path=(plot_dir / "policy_loss.png"))
-            plot_series(hist["value_loss"], "Value Loss", save_path=(plot_dir / "value_loss.png"))
-            plot_series(hist["avg_return"], "Average Return", save_path=(plot_dir / "avg_return.png"))
+        if cfg.save_plots:
+            plot_series(cfg, hist["policy_loss"], "Policy Loss", save_name="policy_loss.png")
+            plot_series(cfg, hist["value_loss"], "Value Loss", save_name="value_loss.png")
+            plot_series(cfg, hist["avg_return"], "Average Return", save_name="avg_return.png")
             if hist["mse_eval"]:
-                plot_series(hist["mse_eval"], "Eval MSE", x=hist["iter_eval"], save_path=(plot_dir / "mse_eval.png"))
+                plot_series(
+                    cfg,
+                    hist["mse_eval"],
+                    "Eval MSE",
+                    x=hist["iter_eval"],
+                    save_name="mse_eval.png",
+                )
 
         mse, acc = evaluate_mse(env_eval, agent, scaler)
         print(f"[FULL] Final MSE={mse:.6f}  sign-acc={acc:.4f}")
@@ -381,20 +511,20 @@ def main() -> None:
 
         # Save run artifacts (config, scaler, feature order)
         save_training_artifacts(
+            cfg=cfg,
             save_dir=save_dir,
             agent=agent,
-            cfg=agent.cfg,
+            ppo_cfg=agent.cfg,
             scaler=scaler,
             df=full_df,
-            feature_cols=FEATURE_COLS,
-            extra={"k_folds": K_FOLDS, "iters": ITERS, "epochs": EPOCHS}
+            extra={"k_folds": cfg.k_folds, "iters": cfg.iters, "epochs": cfg.epochs},
         )
         print(f"Saved training artifacts: {save_dir / 'run_config.json'}, {save_dir / 'scaler.joblib'}")
         return
 
     # ---------- K-fold ----------
     n = len(full_df)
-    folds = forward_chaining_folds(n, K_FOLDS)
+    folds = forward_chaining_folds(n, cfg.k_folds)
     mses: List[float] = []
     accs: List[float] = []
     last_agent: Optional[PPOAgent] = None
@@ -403,8 +533,20 @@ def main() -> None:
         df_tr = full_df.iloc[tr].reset_index(drop=True)
         df_va = full_df.iloc[va].reset_index(drop=True)
 
-        env_eval = Environment(df_va, "target", FEATURE_COLS, reward=SimpleSignReward(THRESHOLD))
-        agent, _, hist = train_on_dataframe(df_tr, fold_tag=f"FOLD_{fold_id}", eval_env=env_eval, scaler=scaler)
+        env_eval = Environment(
+            df_va,
+            "target",
+            cfg.feature_cols,
+            reward=SimpleSignReward(cfg.threshold),
+            include_bias=cfg.include_bias,
+        )
+        agent, _, hist = train_on_dataframe(
+            cfg,
+            df_tr,
+            fold_tag=f"FOLD_{fold_id}",
+            eval_env=env_eval,
+            scaler=scaler,
+        )
 
         # Save CSV curves per fold
         train_csv, eval_csv = save_curves_csv(save_dir, base_name=f"fold{fold_id}", hist=hist)
@@ -413,38 +555,60 @@ def main() -> None:
             print(f"[FOLD {fold_id}] Saved eval curves: {eval_csv}")
 
         # Optional plots
-        if SAVE_PLOTS:
-            plot_series(hist["policy_loss"], f"Policy Loss (Fold {fold_id})", save_path=(plot_dir / f"policy_loss_fold{fold_id}.png"))
-            plot_series(hist["value_loss"], f"Value Loss (Fold {fold_id})", save_path=(plot_dir / f"value_loss_fold{fold_id}.png"))
-            plot_series(hist["avg_return"], f"Average Return (Fold {fold_id})", save_path=(plot_dir / f"avg_return_fold{fold_id}.png"))
+        if cfg.save_plots:
+            plot_series(
+                cfg,
+                hist["policy_loss"],
+                f"Policy Loss (Fold {fold_id})",
+                save_name=f"policy_loss_fold{fold_id}.png",
+            )
+            plot_series(
+                cfg,
+                hist["value_loss"],
+                f"Value Loss (Fold {fold_id})",
+                save_name=f"value_loss_fold{fold_id}.png",
+            )
+            plot_series(
+                cfg,
+                hist["avg_return"],
+                f"Average Return (Fold {fold_id})",
+                save_name=f"avg_return_fold{fold_id}.png",
+            )
             if hist["mse_eval"]:
-                plot_series(hist["mse_eval"], f"Eval MSE (Fold {fold_id})", x=hist["iter_eval"],
-                            save_path=(plot_dir / f"mse_eval_fold{fold_id}.png"))
+                plot_series(
+                    cfg,
+                    hist["mse_eval"],
+                    f"Eval MSE (Fold {fold_id})",
+                    x=hist["iter_eval"],
+                    save_name=f"mse_eval_fold{fold_id}.png",
+                )
 
         mse, acc = evaluate_mse(env_eval, agent, scaler)
-        mses.append(mse); accs.append(acc)
+        mses.append(mse)
+        accs.append(acc)
         print(f"[FOLD {fold_id}] Final val MSE={mse:.6f}  sign-acc={acc:.4f}  (n={len(df_va)})")
 
-        out_path = save_dir / f"ppo_fold{fold_id}.pt"
+        out_path = Path(cfg.save_dir) / f"ppo_fold{fold_id}.pt"
         torch.save(agent.model.state_dict(), str(out_path))
         print(f"Saved weights: {out_path}")
         last_agent = agent
 
     print(f"[CV] mean MSE={np.mean(mses):.6f}  std={np.std(mses):.6f} | mean sign-acc={np.mean(accs):.4f}")
-    torch.save(last_agent.model.state_dict(), str(save_dir / "ppo_full.pt"))
-    print(f"Saved weights: {save_dir / 'ppo_full.pt'}")
+    torch.save(last_agent.model.state_dict(), str(Path(cfg.save_dir) / "ppo_full.pt"))
+    print(f"Saved weights: {Path(cfg.save_dir) / 'ppo_full.pt'}")
 
     # Save run artifacts
     save_training_artifacts(
-        save_dir=save_dir,
+        cfg=cfg,
+        save_dir=Path(cfg.save_dir),
         agent=last_agent,
-        cfg=last_agent.cfg,
+        ppo_cfg=last_agent.cfg,
         scaler=scaler,
         df=full_df,
-        feature_cols=FEATURE_COLS,
-        extra={"k_folds": K_FOLDS, "iters": ITERS, "epochs": EPOCHS}
+        extra={"k_folds": cfg.k_folds, "iters": cfg.iters, "epochs": cfg.epochs},
     )
-    print(f"Saved training artifacts: {save_dir / 'run_config.json'}, {save_dir / 'scaler.joblib'}")
+    print(f"Saved training artifacts: {Path(cfg.save_dir) / 'run_config.json'}, {Path(cfg.save_dir) / 'scaler.joblib'}")
+
 
 if __name__ == "__main__":
     main()
