@@ -16,7 +16,7 @@ from rewards import SimpleSignReward
 from agent import PPOAgent, PPOConfig
 from sklearn.preprocessing import StandardScaler
 import joblib
-
+from rewards import WindowedSignReward_v2
 
 # =========================
 # Central config
@@ -35,10 +35,10 @@ class TrainConfig:
 
     # Saving
     save_dir: str = "checkpoints"
-    save_every: int = 100          # save model every N iterations
+    save_every: int = 250          # save model every N iterations
 
     # PPO / Training
-    iters: int = 300
+    iters: int = 1000
     epochs: int = 5
     batch_size: int = 3000
     minibatch_size: int = 300
@@ -128,7 +128,7 @@ def add_missing_flags_and_zero_fill(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame, StandardScaler]:
+def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame,pd.DataFrame, StandardScaler]:
     path = Path(cfg.data_path)
     if path.suffix.lower() in {".parquet", ".pq"}:
         df = pd.read_parquet(path)
@@ -158,11 +158,14 @@ def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame, StandardScaler]:
     feature_cols = cfg.feature_cols if cfg.feature_cols is not None else [
         c for c in df.columns if c != "target"
     ]
+
+    df_raw = df.copy(deep=True)
+
     scaler = StandardScaler()
     df[feature_cols] = scaler.fit_transform(df[feature_cols])
 
-    df = df.copy(deep=True)
-    return df, scaler
+    df = df.copy(deep=True) #fix fragmented data
+    return df_raw, df, scaler
 
 
 def save_training_artifacts(
@@ -339,11 +342,14 @@ def save_curves_csv(
 def train_on_dataframe(
     cfg: TrainConfig,
     df: pd.DataFrame,
+    df_raw: pd.DataFrame,
     fold_tag: str,
     verbose: int = 1,
     eval_env: Optional[Environment] = None,
     scaler: Optional[StandardScaler] = None
 ) -> Tuple[PPOAgent, Dict[str, float], Dict[str, List[float]]]:
+    
+
 
     device = "cuda" if (cfg.device == "cuda" and torch.cuda.is_available()) else "cpu"
     env = Environment(
@@ -465,7 +471,7 @@ def main() -> None:
     print(f"Using device: {device} | Saving to: {save_dir}")
     print(f"Config: {cfg}")
 
-    full_df, scaler = load_data(cfg)
+    df_raw, full_df, scaler = load_data(cfg)
 
     # ----- single run -----
     if cfg.k_folds <= 1:
@@ -479,6 +485,7 @@ def main() -> None:
         agent, _, hist = train_on_dataframe(
             cfg,
             full_df,
+            df_raw,
             fold_tag="FULL",
             eval_env=env_eval,
             scaler=scaler,
@@ -537,12 +544,13 @@ def main() -> None:
             df_va,
             "target",
             cfg.feature_cols,
-            reward=SimpleSignReward(cfg.threshold),
+            reward=WindowedSignReward_v2(threshold=cfg.threshold,),
             include_bias=cfg.include_bias,
         )
         agent, _, hist = train_on_dataframe(
             cfg,
             df_tr,
+            df_raw,
             fold_tag=f"FOLD_{fold_id}",
             eval_env=env_eval,
             scaler=scaler,
