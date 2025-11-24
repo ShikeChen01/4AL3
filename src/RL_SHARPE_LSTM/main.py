@@ -23,7 +23,7 @@ import joblib
 @dataclass
 class TrainConfig:
     # Data / features
-    data_path: str = r"C:\Year4\4AL3\final-project\4AL3\src\RL\data\train.csv"
+    data_path: str = r"../data/train.csv"
     target_col: str = "forward_returns"
     feature_cols: Optional[List[str]] = None  # None => all except target
 
@@ -33,7 +33,7 @@ class TrainConfig:
     threshold: float = 0.0        # reward threshold
 
     # Saving
-    save_dir: str = r"C:\Year4\4AL3\final-project\4AL3\src\RL_SHARPE\checkpoints"
+    save_dir: str = r"./checkpoints"
     save_every: int = 250          # save model every N iterations
 
     # PPO / Training
@@ -55,7 +55,7 @@ class TrainConfig:
     eval_every: int = 100         # evaluate MSE/accuracy every N iterations
 
     # Plot saving (optional)
-    plot_dir: str = "./plots"
+    plot_dir: str = r"./plots"
     save_plots: bool = True
 
 
