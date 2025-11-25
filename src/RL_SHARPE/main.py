@@ -41,11 +41,11 @@ class TrainConfig:
     epochs: int = 5
     batch_size: int = 3000
     minibatch_size: int = 300
-    lr: float = 3e-4
+    lr: float = 1e-5
     clip_eps: float = 0.2
     gamma: float = 0.99
-    lam: float = 0.95
-    entropy_coef: float = 0.01
+    lam: float = 0.9
+    entropy_coef: float = 0.05
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
     l2_lambda: float = 1e-4
@@ -66,10 +66,6 @@ def parse_args() -> TrainConfig:
     default = TrainConfig()
     p = argparse.ArgumentParser(description="PPO stock prediction training")
     
-    # (Arg parsing code omitted for brevity - assume standard boilerplate is same as before)
-    # ... standard arguments ...
-    
-    # Re-using your existing argparse logic from previous file
     p.add_argument("--data-path", type=str, default=default.data_path)
     p.add_argument("--target-col", type=str, default=default.target_col)
     p.add_argument("--feature-cols", type=str, nargs="*", default=None)
@@ -100,7 +96,7 @@ def add_missing_flags_and_zero_fill(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame,pd.DataFrame, StandardScaler]:
+def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame, pd.DataFrame, StandardScaler]:
     path = Path(cfg.data_path)
     if path.suffix.lower() in {".parquet", ".pq"}:
         df = pd.read_parquet(path)
@@ -113,20 +109,41 @@ def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame,pd.DataFrame, StandardScal
 
     df = df.rename(columns={cfg.target_col: "target"})
 
-    # IMPORTANT: Do NOT drop risk_free_rate, it is needed for Sharpe reward
+    # Drop leakage
     to_drop = [c for c in df.columns if "market_forward_excess_returns" in c]
     if to_drop:
         df = df.drop(columns=to_drop)
 
     df = add_missing_flags_and_zero_fill(df)
 
-    feature_cols = cfg.feature_cols if cfg.feature_cols is not None else [
-        c for c in df.columns if c != "target"
-    ]
+    # --- 1. Update Config to Exclude risk_free_rate ---
+    # We modify cfg.feature_cols IN-PLACE.
+    if cfg.feature_cols is None:
+        # Default: All columns except target and risk_free_rate
+        cfg.feature_cols = [
+            c for c in df.columns 
+            if c != "target" and c != "risk_free_rate"
+        ]
+    else:
+        # If user provided list, ensure exclusion
+        cfg.feature_cols = [
+            c for c in cfg.feature_cols 
+            if c != "risk_free_rate"
+        ]
 
+    # --- 2. Scale ---
     df_raw = df.copy(deep=True)
     scaler = StandardScaler()
-    df[feature_cols] = scaler.fit_transform(df[feature_cols])
+    # Only scale the features selected in cfg.feature_cols
+    df[cfg.feature_cols] = scaler.fit_transform(df[cfg.feature_cols])
+    df[cfg.feature_cols] = df[cfg.feature_cols].fillna(0.0)
+    
+    # --- 3. Drop Last 500 Rows (Reserve for Eval) ---
+    if len(df) > 500:
+        print(f"Dropping last 500 rows from training data. (Orig: {len(df)} -> New: {len(df)-500})")
+        df = df.iloc[:-500].reset_index(drop=True)
+        df_raw = df_raw.iloc[:-500].reset_index(drop=True)
+    
     df = df.copy(deep=True)
     return df_raw, df, scaler
 
@@ -134,9 +151,10 @@ def load_data(cfg: TrainConfig) -> Tuple[pd.DataFrame,pd.DataFrame, StandardScal
 def save_training_artifacts(cfg: TrainConfig, save_dir: Path, agent: PPOAgent, 
                            ppo_cfg: PPOConfig, scaler: StandardScaler, df: pd.DataFrame, extra=None):
     save_dir.mkdir(parents=True, exist_ok=True)
-    resolved_features = cfg.feature_cols if cfg.feature_cols else [c for c in df.columns if c != "target"]
     
-    # Get correct action dim
+    # cfg.feature_cols is now populated correctly by load_data
+    resolved_features = cfg.feature_cols
+    
     n_actions_out = agent.model.policy_head.out_features
 
     run_cfg = {
@@ -156,11 +174,15 @@ def save_training_artifacts(cfg: TrainConfig, save_dir: Path, agent: PPOAgent,
 # =========================
 def rollout(env: Environment, agent: PPOAgent, steps: int, gamma: float, lam: float) -> Dict[str, np.ndarray]:
     obs_buf, act_buf, logp_buf, rew_buf, val_buf, done_buf = [], [], [], [], [], []
+    h_buf, c_buf = [], [] # LSTM States
+
     obs = env.reset()
+    if hasattr(agent, "reset_hidden_state"):
+        agent.reset_hidden_state()
+
     for _ in range(steps):
-        a_idx, logp, v = agent.act(obs)
+        a_idx, logp, v, (h, c) = agent.act(obs)
         
-        # DIRECT PASS: Agent gives index 0..4, Env maps to Leverage 0.0..2.0
         next_obs, r, done, info = env.step(a_idx)
 
         obs_buf.append(obs.copy())
@@ -169,10 +191,15 @@ def rollout(env: Environment, agent: PPOAgent, steps: int, gamma: float, lam: fl
         rew_buf.append(r)
         val_buf.append(v)
         done_buf.append(done)
+        
+        h_buf.append(h)
+        c_buf.append(c)
 
         obs = next_obs
         if done:
             obs = env.reset()
+            if hasattr(agent, "reset_hidden_state"):
+                agent.reset_hidden_state()
 
     obs_arr = np.asarray(obs_buf, dtype=np.float32)
     acts_arr = np.asarray(act_buf, dtype=np.int64)
@@ -180,6 +207,9 @@ def rollout(env: Environment, agent: PPOAgent, steps: int, gamma: float, lam: fl
     rew_arr = np.asarray(rew_buf, dtype=np.float32)
     val_arr = np.asarray(val_buf, dtype=np.float32)
     done_arr = np.asarray(done_buf, dtype=np.bool_)
+    
+    h_arr = np.stack(h_buf)
+    c_arr = np.stack(c_buf)
 
     next_values = np.concatenate([val_arr[1:], np.array([0.0], dtype=np.float32)])
     deltas = rew_arr + (1.0 - done_arr.astype(np.float32)) * gamma * next_values - val_arr
@@ -191,7 +221,11 @@ def rollout(env: Environment, agent: PPOAgent, steps: int, gamma: float, lam: fl
         adv[t] = last_gae
     ret = adv + val_arr
 
-    return {"obs": obs_arr, "acts": acts_arr, "logp": logp_arr, "adv": adv, "ret": ret}
+    return {
+        "obs": obs_arr, "acts": acts_arr, "logp": logp_arr, 
+        "adv": adv, "ret": ret, 
+        "hidden_h": h_arr, "hidden_c": c_arr
+    }
 
 
 # =========================
@@ -200,18 +234,20 @@ def rollout(env: Environment, agent: PPOAgent, steps: int, gamma: float, lam: fl
 def evaluate_mse(env: Environment, agent: PPOAgent, scaler: StandardScaler) -> Tuple[float, float]:
     device = agent.device
     y_true: List[float] = []
-    y_action_val: List[float] = [] # Actual leverage used
+    y_action_val: List[float] = [] 
 
     obs = env.reset()
+    if hasattr(agent, "reset_hidden_state"):
+        agent.reset_hidden_state()
+        
     done = False
     while not done:
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad():
-            logits, _ = agent.model(obs_t)
+            logits, _, new_hidden = agent.model(obs_t, agent.current_hidden)
+            agent.current_hidden = new_hidden
             a_idx = int(torch.argmax(logits, dim=-1).item())
         
-        # FIX: No dictionary mapping. Pass index directly.
-        # Get the float leverage from env for logging
         action_leverage = float(env.action_map[a_idx])
         
         t = env.t
@@ -223,12 +259,7 @@ def evaluate_mse(env: Environment, agent: PPOAgent, scaler: StandardScaler) -> T
     y_true_arr = np.asarray(y_true, dtype=np.float32)
     y_act_arr = np.asarray(y_action_val, dtype=np.float32)
 
-    # MSE is not super useful here (leverage vs return), but calculating for code stability
     mse = float(np.mean((y_act_arr - y_true_arr) ** 2))
-    
-    # Sign accuracy: Did we hold leverage (>0.1) when return was >0? 
-    # Or hold cash (<0.1) when return was <0?
-    # Simple proxy:
     pos_ret = y_true_arr > 0
     pos_pos = y_act_arr > 0.1 
     acc = float(np.mean(pos_ret == pos_pos))
@@ -269,15 +300,13 @@ def save_curves_csv(save_dir: Path, base_name: str, hist: Dict[str, List[float]]
 
 def train_on_dataframe(cfg, df, df_raw, fold_tag, verbose=1, eval_env=None, scaler=None):
     device = "cuda" if (cfg.device == "cuda" and torch.cuda.is_available()) else "cpu"
-    
-    # CONFIG: Define Action Bins (0x to 2x)
-    N_ACTION_BINS = 5 # e.g. 0.0, 0.5, 1.0, 1.5, 2.0
+    N_ACTION_BINS = 5 
 
     env = Environment(
         data=df,
         target_col="target",
-        feature_cols=cfg.feature_cols,
-        reward=CompetitionMetricReward(window_size=252), # Use Sharpe Reward
+        feature_cols=cfg.feature_cols, 
+        reward=CompetitionMetricReward(window_size=252), 
         include_bias=cfg.include_bias,
         n_action_bins=N_ACTION_BINS 
     )
@@ -289,7 +318,6 @@ def train_on_dataframe(cfg, df, df_raw, fold_tag, verbose=1, eval_env=None, scal
         max_grad_norm=cfg.max_grad_norm, l2_lambda=cfg.l2_lambda,
     )
     
-    # Pass correct n_actions to Agent
     agent = PPOAgent(obs_dim=env.obs_dim, n_actions=N_ACTION_BINS, device=device, cfg=ppo_cfg)
 
     hist = {"policy_loss": [], "value_loss": [], "entropy": [], "avg_return": [], "mse_eval": [], "acc_eval": [], "iter_eval": []}
@@ -326,23 +354,32 @@ def main():
     device = "cuda" if (cfg.device == "cuda" and torch.cuda.is_available()) else "cpu"
     print(f"Config: {cfg}")
 
-    df_raw, full_df, scaler = load_data(cfg)
+    # load_data now modifies cfg.feature_cols and drops last 500 rows
+    df_raw, train_df, scaler = load_data(cfg)
+    
+    print(f"Training on {len(train_df)} rows. (Last 500 rows dropped).")
+    print(f"Features used ({len(cfg.feature_cols)}): {cfg.feature_cols}")
 
     if cfg.k_folds <= 1:
-        # For evaluation, we use CompetitionMetricReward too to see real performance, or SimpleSign
+        # Eval env uses the training data (since test data is gone)
+        # or you can split 'train_df' further if you want internal validation.
+        # Here we just use the training set for periodic logging.
         env_eval = Environment(
-            full_df, "target", cfg.feature_cols, 
+            train_df, "target", cfg.feature_cols, 
             reward=CompetitionMetricReward(), 
             include_bias=cfg.include_bias,
-            n_action_bins=5 # Match training
+            n_action_bins=5 
         )
-        agent, _, hist = train_on_dataframe(cfg, full_df, df_raw, "FULL", eval_env=env_eval, scaler=scaler)
+        agent, _, hist = train_on_dataframe(cfg, train_df, df_raw, "FULL", eval_env=env_eval, scaler=scaler)
+        
         save_curves_csv(save_dir, "full", hist)
         torch.save(agent.model.state_dict(), str(save_dir / "ppo_full.pt"))
+        
+        # Save artifacts (config, scaler) for evaluate.py
+        save_training_artifacts(cfg, save_dir, agent, agent.cfg, scaler, train_df)
+        print("Training complete. Artifacts saved for evaluate.py")
         return
 
-    # K-Fold
-    # ... (Logic is similar, just ensure n_action_bins is consistent) ...
     print("Please run with k_folds=1 for testing basic functionality first.")
 
 if __name__ == "__main__":

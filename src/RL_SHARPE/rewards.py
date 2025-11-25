@@ -40,7 +40,7 @@ class CompetitionMetricReward:
         self._risk_free_rates.append(risk_free)
 
         # Warmup phase
-        if len(self._strat_returns) < 2:
+        if len(self._strat_returns) < 5:
             return 0.0
 
         # 2. Convert to Numpy
@@ -95,4 +95,4 @@ class CompetitionMetricReward:
         if np.isnan(adjusted_sharpe) or np.isinf(adjusted_sharpe):
             return 0.0
             
-        return np.clip(adjusted_sharpe, -10, 10)
+        return np.clip(adjusted_sharpe, -100, 100)

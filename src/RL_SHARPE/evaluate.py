@@ -223,7 +223,7 @@ def plot_cum_target_vs_strategy(result: TradeResult, title: str = "Cumulative Re
 # -----------------------------
 if __name__ == "__main__":
     # --- EDIT THESE ---
-    CKPT_PATH = r"C:\Year4\4AL3\final-project\4AL3\checkpoints\ppo_full_iter500.pt" 
+    CKPT_PATH = r"C:\Year4\4AL3\final-project\4AL3\checkpoints\temp5\checkpoints\ppo_full_iter1250.pt" 
     DATA_PATH = r"C:\Year4\4AL3\final-project\4AL3\result\RL_1\data\train.csv"
     TARGET_COL = "forward_returns"
     DATE_COL: Optional[str] = None 
