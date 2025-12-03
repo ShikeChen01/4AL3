@@ -213,7 +213,7 @@ def run_trading(
 
     # Map indices to Leverage
     n_actions = model.policy_head.out_features
-    action_map = np.linspace(0, 2.0, n_actions)
+    action_map = np.linspace(0.0, 2.0, n_actions)
 
     actions = np.zeros(len(df), dtype=np.float32)
     daily_pnl = np.zeros(len(df), dtype=np.float32)
@@ -306,7 +306,7 @@ def plot_cum_target_vs_strategy(result: TradeResult, title: str = "Cumulative Re
 # -----------------------------
 if __name__ == "__main__":
     # --- CONFIG ---
-    CKPT_PATH = r"C:\Year4\4AL3\final-project\4AL3\checkpoints\LSTM2_150\checkpoints\ppo_iter3500.pt" 
+    CKPT_PATH = r"C:\Year4\4AL3\final-project\4AL3\checkpoints\LSTM2_150\checkpoints\ppo_iter1500.pt" 
     DATA_PATH = r"C:\Year4\4AL3\final-project\4AL3\src\RL\data\train.csv"
     TARGET_COL = "forward_returns"
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

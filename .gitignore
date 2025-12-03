@@ -22,3 +22,6 @@ result/
 *.zip
 checkpoints/
 plots/
+# Ignore Office temporary lock files
+~$*
+*.tmp

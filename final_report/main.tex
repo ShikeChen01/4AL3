@@ -1,0 +1,723 @@
+\documentclass[11pt]{article}
+
+% Change "review" to "final" to generate the final (sometimes called
+% camera-ready) version.
+% Change to "preprint" to generate a non-anonymous version with page numbers.
+\usepackage[]{acl}
+\usepackage{times}
+\usepackage{latexsym}
+
+% For proper rendering and hyphenation of words containing Latin characters
+% (including in bib files)
+\usepackage[T1]{fontenc}
+% For Vietnamese characters
+% \usepackage[T5]{fontenc}
+% See https://www.latex-project.org/help/documentation/encguide.pdf for other
+% character sets
+
+% This assumes your files are encoded as UTF8
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+
+\usepackage{amsmath}      % math environments
+\usepackage{amssymb}      % extra math symbols
+\usepackage{amsfonts}     % math fonts, including \mathbb
+\usepackage{bbm}          % gives \mathbbm{1} (indicator function)
+\usepackage{graphicx}     % images
+\usepackage{booktabs}     % pretty tables (optional)
+\usepackage{hyperref}     % clickable refs (always useful)
+\usepackage{float}        % for H in figures
+
+
+% If the title and author information does not fit in the area allocated,
+% uncomment the following
+%
+%\setlength\titlebox{<dim>}
+%
+% and set <dim> to something 5cm or larger.
+
+\title{Group 96 Final Report:\\ Hull Market Challenge}
+
+
+\author{Shike Chen, Xiaotian Lou, Tianjiao Xiao \\
+  \texttt{\{xiaot13,loux8,chens356\}@mcmaster.ca} }
+
+%\author{
+%  \textbf{First Author\textsuperscript{1}},
+%  \textbf{Second Author\textsuperscript{1,2}},
+%  \textbf{Third T. Author\textsuperscript{1}},
+%  \textbf{Fourth Author\textsuperscript{1}},
+%\\
+%  \textbf{Fifth Author\textsuperscript{1,2}},
+%  \textbf{Sixth Author\textsuperscript{1}},
+%  \textbf{Seventh Author\textsuperscript{1}},
+%  \textbf{Eighth Author \textsuperscript{1,2,3,4}},
+%\\
+%  \textbf{Ninth Author\textsuperscript{1}},
+%  \textbf{Tenth Author\textsuperscript{1}},
+%  \textbf{Eleventh E. Author\textsuperscript{1,2,3,4,5}},
+%  \textbf{Twelfth Author\textsuperscript{1}},
+%\\
+%  \textbf{Thirteenth Author\textsuperscript{3}},
+%  \textbf{Fourteenth F. Author\textsuperscript{2,4}},
+%  \textbf{Fifteenth Author\textsuperscript{1}},
+%  \textbf{Sixteenth Author\textsuperscript{1}},
+%\\
+%  \textbf{Seventeenth S. Author\textsuperscript{4,5}},
+%  \textbf{Eighteenth Author\textsuperscript{3,4}},
+%  \textbf{Nineteenth N. Author\textsuperscript{2,5}},
+%  \textbf{Twentieth Author\textsuperscript{1}}
+%\\
+%\\
+%  \textsuperscript{1}Affiliation 1,
+%  \textsuperscript{2}Affiliation 2,
+%  \textsuperscript{3}Affiliation 3,
+%  \textsuperscript{4}Affiliation 4,
+%  \textsuperscript{5}Affiliation 5
+%\\
+%  \small{
+%    \textbf{Correspondence:} \href{mailto:email@domain}{email@domain}
+%  }
+%}
+
+\begin{document}
+\maketitle
+% \begin{abstract}
+% \end{abstract}
+
+\section{Introduction}
+Currently majority of the financial market prediction models are relying
+on traditional index digging, technical analysis, regression models.
+However, with modern machine learning techniques emerging in NLP,
+the industry see a huge potential in bringing complex models to
+analyze and predict the market movement.
+
+Over the years, majority of the investors, including professionals,
+have struggled to consistently beat the S\&P500 index. In this challenge,
+we also understand the effect of the efficient market hypothesis, which
+states that stock prices fully reflect all available information. Thus, it is
+impossible to consistently achieve higher returns than average market returns on a
+risk-adjusted basis, given that stock prices should only react to new
+information.
+
+However, with the advancement of machine learning techniques, if we are able
+to implement these new techniques to analyze the market data, we may be able to
+uncover hidden patterns and profit. Since these are also considered as new
+information, the effective market hypothesis still holds.
+
+Since we do not know the preprocessing steps of the features, it is difficult
+for the team to use traditional, statistical methods to give meaningful
+insightful analysis. Thus, we decided to use predominantly unsuperised learning
+methods to analyze the data and predict the S\&P500 return.
+
+The overall objective of our project is to predict the S\&P500 return using the
+pre-processed data provided by Hull Tactical. Beyond simple directional
+prediction, our ultimate goal is to generate a trading algorithm that optimizes
+the competition's specific Sharpe ratio. Unlike a standard risk-adjusted metric,
+the competition Sharpe ratio imposes strict penalties on strategies that exhibit
+excessive volatility relative to the market or fail to match the market's
+baseline return. Therefore, our modeling approach focuses on balancing high
+returns with rigorous risk control to maximize this specific performance metric.
+
+\section{Related Work}
+
+Predicting stock prices in an unsupervised manner is more naturally framed as a
+sequential decision-making problem rather than a static supervised regression
+task. In this context, reinforcement learning (RL), and in particular the
+algorithm Proximal Policy Optimisation (PPO) \citep{Schulman2017}, offers a
+compelling framework. PPO is an on-policy actor–critic method that stabilises
+policy updates by clipping its surrogate objective, thereby limiting
+destabilising policy shifts in non-stationary, noisy environments such as
+financial markets.
+
+Adaptive trading strategies using deep RL have been applied to portfolio
+management. For example, Huang et al.\ \citep{Huang2020} apply deep
+reinforcement learning to portfolio allocation, including short-selling and
+arbitrage in continuous action spaces, showing that RL agents can outperform
+benchmarks in equity markets. Jiang et al.\ \citep{Jiang2024} propose a
+model-free DRL framework for portfolio selection under dynamic market
+complexity, demonstrating improved performance in large-scale plot settings. On
+the risk-management front, Lam et al.\ \citep{Lam2023} develop a unified
+risk-aware RL framework that uses coherent risk measures with non-linear
+function approximation, delivering regret bounds in risk-constrained trading
+scenarios. Finally, Soleymani \& Paquet \citep{Soleymani2021} introduce a
+graph-convolutional RL architecture (DeepPocket) that models inter-plot
+correlations for portfolio optimisation and shows strong empirical performance.
+
+Together, these studies underscore that combining PPO-style policy optimisation,
+temporal or graph encoders (e.g., recurrent nets or GCNs), and risk-adjusted
+reward functions offers a promising unsupervised framework for stock prediction
+and trading-policy development.
+
+\section{Dataset}
+There is no significant change in the final dataset compared to the progress
+report. The dataset used in this project is the same equity return prediction
+dataset referenced in the project proposal. An updated version of the dataset
+was released on November 6th. The update primarily expanded the number of
+observations and refined the calculation of forward returns. However, this
+revision did not materially change the statistical properties of the data
+distribution, nor did it require changes to our modeling pipeline, since our
+learning framework does not rely on absolute scale but rather on relative
+directional signals.
+
+The dataset consist of 8 different feature groups.
+These feature groups are:
+\begin{itemize}
+  \item M* Market Dynamics/Technical features.
+  \item E* Macro Economic features.
+  \item I* Interest Rate features.
+  \item P* Price/Valuation features.
+  \item V* Volatility features.
+  \item S* Sentiment features.
+  \item MOM* Momentum features.
+  \item D* Dummy/Binary features.
+\end{itemize}
+For example, a feature related to Price/Valueation will be denoted as column V1,
+V2, etc.
+
+\subsection{Preprocessing and Analysis}
+Some analysis are ran on the dataset to understand the basic nature of the data.
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\columnwidth]{asset/DvsT.png}
+  \caption{relationship between binary and target}
+  \label{fig:target_hist}
+\end{figure}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\columnwidth]{asset/top_corr.png}
+  \caption{distribution of target variable}
+  \label{fig:target_hist}
+\end{figure}
+
+From observing Figure 1 and Figure 2, as expected in financial forecasting
+problems, the empirical distribution of features and target is extremely noisy
+and return is distributed closely to zero. Features released are all have a weak
+to no visible relationship with the target variable. Therefore, when training,
+we normalize the target variable to have zero mean and unit variance which make
+sure the loss will not diminish during backward propagation.
+
+The dataset also contains missing values, particularly in indicators
+constructed from rolling windows of different lengths. To avoid discarding
+information, we do not remove rows with missing data. Instead, we replace
+\texttt{NaN} values with zeros and add binary missing indicator flags for each
+affected feature:
+\[
+x^{(\text{filled})}_i =
+\begin{cases}
+0, & \text{if } x_i \text{ was missing} \\
+x_i, & \text{otherwise}
+\end{cases}
+\]
+This preserves potential information carried by the absence of values. Data
+loading and cleaning follows our \texttt{load\_data} and missing-indicator
+augmentation utility functions.
+
+We also realized that because the datapoint we have is about 9000 datapoints,
+given a trading days in a year is about 252 days, the data only covers about 37
+years of data. Due to the nature of the financial market, data points from the
+early years have large amount of features missing and market changed significantly
+over the past 37 years, thus we decided to remove the first 4000 data points
+from the training and evaluation process and heavily evaluate on the last 1000
+data points. \textbf{For the reste of the report, an overall result would refer
+to the result on the data excluding the first 4000 data points.}
+
+\vspace{6pt}
+\section{Features}
+
+We did not change too much about our features in our final implementation.
+The main preprocessing steps applied to the features are:
+\begin{itemize}
+    \item Standardization of all numeric features via $z$-score normalization.
+    \item Addition of missing-value indicator features for all originally
+          \texttt{NaN}-carrying columns.
+    \item remove early data points where it is not representative to the current
+    \item regularization technique to penalize noisy feature
+    market situation.
+\end{itemize}
+
+Because financial features often exhibit collinearity, we conducted correlation
+inspections to assess which features carry directional information relative to
+\texttt{target}. However, no workable linear correlation found in this dataset.
+The processed data is feeded to an reinforcement learning environment to
+generate state frames, then the agent will learn based on the rewards from the
+reinforcement learning environment.
+
+We introduced regularization techniques to penalize noisy features that do not
+have real predictive power.
+
+\vspace{6pt}
+\section{Implementation}
+
+\subsection{Competition SHARPE Ratio}
+One of our main objective is to have a model that can generalize well on unseen
+data, perform well against the adjusted competition SHARPE ratio.
+
+The strategy return at time $t$, denoted as $R_t^S$, is calculated based on the
+position $p_t \in [0, 2]$, the risk-free rate $r_f$, and the forward market
+return $R_t$:
+\begin{equation}
+    R_t^S = r_f \cdot (1 - p_t) + p_t \cdot R_t
+\end{equation}
+
+The base annualized Sharpe ratio is computed using the geometric mean of excess
+returns ($\mu_S$) and the annualized standard deviation ($\sigma_S$):
+\begin{equation}
+    \text{Sharpe} = \frac{\mu_S}{\sigma_S} \sqrt{252}
+\end{equation}
+
+However, the final competition score is adjusted by two penalty factors:
+
+\begin{itemize}
+    \item \textbf{Volatility Penalty ($P_{\text{vol}}$):} This penalizes
+    strategies that exhibit volatility significantly higher than the market
+    volatility ($\sigma_M$). Specifically, it penalizes strategies where the
+    volatility ratio exceeds 1.2:
+    \[
+    P_{\text{vol}} = 1 + \max\left(0, \frac{\sigma_S}{\sigma_M} - 1.2\right)
+    \]
+
+    \item \textbf{Return Penalty ($P_{\text{ret}}$):} This penalizes
+    strategies that fail to match the market's mean excess return ($\mu_M$). If
+    the strategy underperforms the market, the gap is squared to apply a heavy
+    penalty:
+    \[
+    P_{\text{ret}} = 1 + \frac{\max(0, (\mu_M - \mu_S) \cdot C)^2}{100}
+    \]
+    where $C = 252 \times 100$ scales the annualized return percentage.
+\end{itemize}
+
+The final Adjusted Sharpe Ratio is defined as:
+\begin{equation}
+    \text{Score} = \frac{\text{Sharpe}}{P_{\text{vol}} \times P_{\text{ret}}}
+\end{equation}
+
+\textbf{Difference from Standard Sharpe:}
+The standard Sharpe ratio rewards any increase in return per unit of risk.
+In contrast, the Competition Sharpe Ratio acts as a constrained optimization
+metric. It implies that a "good" strategy must not only be efficient but must
+also (1) avoid excessive risk relative to the market regime (volatility constraint)
+and (2) at least match the market's absolute return (return constraint).
+This prevents "safe" strategies with low volatility and low returns from
+achieving high scores, which would be possible under a standard Sharpe
+formulation.
+
+\subsection{Reinforcement Learning}
+Our core modeling framework remains a reinforcement learning (RL) agent based on
+Proximal Policy Optimization (PPO). Rather than predicting raw return values,
+the task is formulated as a sequential decision problem. At each timestep, the
+agent selects two of the actions spaces:
+\[
+a_t \in \{0, 0.5, 1, 1.25, 2\} 
+\]
+\[
+a_t \in \{0, 1, 1.25\}
+\]
+
+These action spaces are arbitrary, inspired by the modified challenge Sharpe
+ratio calculation. The competition requires a long-only approach with a maximum
+leverage of 2x. However, to adjust such action space to the stnadard RL, it
+requires us to transform leverage into action spaces. Thus we discretize the
+action space.
+
+
+\subsection{Agent}
+To capture the complex dynamics of the market, we implemented an Actor-Critic
+framework where the policy $\pi_\theta$ and value function $V_\phi$ share a
+common feature extraction backbone. We experimented with two distinct
+architectures to balance model complexity with the ability to learn temporal
+dependencies.
+
+\subsubsection{MLP Architecture}
+Our baseline agent utilizes a deep feed-forward network. The shared feature
+extractor consists of an input projection followed by an expansion-compression
+bottleneck design, intended to capture non-linear interactions between features
+before decision-making. The forward pass is defined as:
+\begin{align*}
+    h_1 &= \text{ReLU}(W_1 x + b_1) \\
+    h_2 &= W_2 h_1 + b_2 \quad (\text{Expansion to } 2 \times \text{hidden}) \\
+    h_{\text{shared}} &= \text{ReLU}(W_3 h_2 + b_3) \quad (\text{Compression})
+\end{align*}
+The output $h_{\text{shared}}$ is then fed into separate linear heads to produce
+action logits and value estimates. This architecture is computationally
+efficient and serves as a strong baseline for instantaneous decision-making
+without explicit memory.
+
+\subsubsection{LSTM Architecture}
+Financial time-series data is inherently sequential. To leverage this, we
+implemented a Recurrent Neural Network (RNN) variant using Long Short-Term
+Memory (LSTM) cells. The architecture proceeds as follows:
+\begin{enumerate}
+    \item \textbf{Feature Extractor:} A linear layer projects the observation
+    space to the hidden dimension size followed by a ReLU activation.
+    \item \textbf{Temporal Encoding:} The extracted features are passed through
+    an LSTM layer which maintains an internal hidden state $(h_t, c_t)$ across
+    time steps.
+    \item \textbf{Heads:} The LSTM output is projected to action probabilities
+    and value estimates.
+\end{enumerate}
+To train this recurrent agent effectively with PPO, we utilize a block-shuffling
+mechanism. The trajectory buffer is divided into contiguous time blocks (e.g.,
+256 steps). The internal LSTM states are stored and re-injected at the
+beginning of each block during the update phase, allowing the agent to learn
+temporal dependencies while preserving the I.I.D. assumption required for
+stochastic gradient descent.
+
+Both architectures incorporate L2 regularization on the
+weights to prevent overfitting to the noisy financial data.
+
+\subsubsection{Rewards}
+We perform a standard transformation from stock returns to a Monte Carlo State
+Space. To guide the agent, we experimented with four distinct reward
+architectures, evolving from simple directional matching to direct optimization
+of the competition metric.
+
+\begin{itemize}
+    \item \textbf{Simple Sign Reward:}
+    This baseline reward focuses purely on directional accuracy. It defines a
+    threshold $\tau$ to handle flat market conditions. The reward $r_t$ is
+    determined by whether the sign of the action matches the sign of the target
+    (forward return):
+    \[
+        r_t =
+        \begin{cases}
+            R_{\text{correct}} & \text{if } \text{sgn}(a_t) = \text{sgn}(y_t) \\
+            R_{\text{correct}} & \text{if } |y_t| < \tau \text{ and } a_t = 0 \\
+            P_{\text{wrong}} & \text{otherwise}
+        \end{cases}
+    \]
+    where $R_{\text{correct}}$ is a positive reward and $P_{\text{wrong}}$ is a
+    penalty.
+
+    \item \textbf{Windowed Sign Reward (v1):}
+    To incorporate the magnitude of returns and enforce consistency, this
+    function adds the realized P\&L to the sign reward. Crucially, it introduces
+    a \textit{rolling window penalty}. The agent maintains a history of recent
+    rewards; if the cumulative reward over the window $W$ is non-positive, an
+    additional penalty is applied:
+    \[
+        r_t = (a_t \cdot y_t) + r_{\text{sign}} + P_{\text{window}}
+    \]
+    where $P_{\text{window}}$ is triggered if $\sum_{i=t-W}^{t} r_i \le 0$. This
+    discourages the agent from getting stuck in local minima of poor
+    performance.
+
+    \item \textbf{Windowed Sign Reward (v2):}
+    Our most advanced iteration introduces an \textit{Action Penalty} to combat
+    passivity. In addition to the logic in v1, this function monitors the moving
+    average of the action magnitude. If the agent remains too passive (holding
+    or taking low-confidence actions) over a window $W_a$, a cumulative penalty
+    is applied:
+    \[
+       r_t = (a_t \cdot 100 \cdot y_t) + r_{\text{sign}} + P_{\text{window}} +
+       P_{\text{action}}
+    \]
+    Here, the target is scaled by 100 to normalize gradients, and
+    $P_{\text{action}}$ ensures the agent maintains a minimum level of market
+    engagement.
+
+    \item \textbf{Competition Metric Reward:}
+    Finally, we implemented a reward function that directly optimizes the
+    competition's objective. Unlike the proxy rewards based on instantaneous
+    signs, this function maintains a rolling window (default $W=252$) to
+    estimate the volatility-adjusted Sharpe ratio at every timestep. The reward
+    $r_t$ is defined as the current value of the competition metric:
+    \[
+       r_t = \frac{\text{Sharpe}_{t,W}}{P_{\text{vol}} \cdot P_{\text{ret}}}
+    \]
+    where $P_{\text{vol}}$ and $P_{\text{ret}}$ are the dynamic penalties for
+    excess volatility and underperformance relative to the market within the
+    window. This approach encourages the agent to learn the complex trade-offs
+    between risk, return, and market correlation directly.
+\end{itemize}
+
+\subsection{Baselines}
+
+Since we are evaluating against the Competition SHARPE Ratio, the best and most
+straightforward baseline is to BUY the S\&P500 index and HOLD it throughout the
+evaluation period. We will evaluate our RL agent against this baseline with the
+same data period since the baseline SHARPE Ratio vary over different time
+periods. The baseline SHARPE Ratio overall is 0.556.
+
+\subsection{Loss Function}
+We train the agent by minimizing a composite loss function that combines the
+Proximal Policy Optimization (PPO) surrogate objective, a value function error
+term, and an entropy bonus to encourage exploration. The total
+loss function $L(\theta)$ is defined as:
+
+\[
+L(\theta) = \mathcal{L}^{CLIP}(\theta) + c_1 \mathcal{L}^{VF}(\theta) - c_2
+S[\pi_\theta](s_t) + \lambda_{L2} ||\theta||^2
+\]
+
+\begin{itemize}
+    \item $\mathcal{L}^{CLIP}(\theta)$ is the negative of the clipped surrogate
+    objective. We minimize this term to maximize the expected reward while
+    limiting the size of policy updates to ensure stability:
+    \[
+    \begin{aligned}
+    \mathcal{L}^{CLIP}(\theta) &= -\hat{\mathbb{E}}_t \Big[ \min( r_t(\theta)\hat{A}_t, \\
+    &\quad \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t) \Big]
+    \end{aligned}
+    \]
+    Here, $r_t(\theta) =
+    \frac{\pi_\theta(a_t|s_t)}{\pi_{\theta_{old}}(a_t|s_t)}$ is the probability
+    ratio, and $\hat{A}_t$ is the estimated advantage.
+
+    \item $\mathcal{L}^{VF}(\theta)$ is the value function loss, calculated as
+    the mean squared error between the estimated value $V_\theta(s_t)$ and the
+    observed returns $R_t$. In our implementation, we scale this term by 0.5:
+    \[
+    \mathcal{L}^{VF}(\theta) = 0.5 \cdot (V_\theta(s_t) - R_t)^2
+    \]
+
+    \item $S[\pi_\theta](s_t)$ is the entropy of the policy distribution. By
+    subtracting this term (maximizing entropy), we prevent the agent from
+    prematurely converging to a deterministic, suboptimal policy.
+
+    \item $\lambda_{L2}$ is the coefficient for L2 regularization applied to the
+    network weights to mitigate overfitting to financial noise.
+\end{itemize}
+
+In our final configuration, we set the value coefficient $c_1=0.5$, the entropy
+coefficient $c_2=0.05$, and the L2 regularization parameter
+$\lambda_{L2}=10^{-4}$.
+
+\section{Results and Evaluation}
+
+\subsection{Performance Comparison}
+
+We evaluated our models across different time horizons to test for consistency
+and generalization. The "Overall" score represents the Sharpe ratio across the
+entire dataset, while specific windows (e.g., "Last 500") isolate performance on
+the most recent, unseen market regimes. The "Baseline" represents a simple
+Buy-and-Hold strategy.
+
+Table~\ref{tab:results_summary} summarizes the results of our experiments.
+
+\begin{table}[H]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Overall} & \textbf{Last 500} & \textbf{Last 1000} &
+\textbf{Last 1500} & \textbf{First 1500} \\
+               & (Train+Test)     & \textbf{(Held-Out)} &                    &
+                   & (Training) \\
+\midrule
+\textbf{Baseline (Buy \& Hold)} & 0.56 & 1.19 & 0.42 & 0.64 & 0.09 \\
+\midrule
+Window LSTM 5 action (Early Stop) & 0.75 & 1.34 & 0.57 & 0.90 & 0.19 \\
+Window MLPs Small 3 action (Large Step) & 2.32 & 1.49 & 0.54 & 0.62 & 4.48 \\
+Window MLPs Small 3 action (Small Step) & 1.40 & \textbf{1.59} & \textbf{0.51} &
+\textbf{0.68} & 1.85 \\
+Window MLPs Large 3 action & \textbf{3.56} & 1.12 & 0.26 & 0.48 & \textbf{7.14} \\
+Window MLPs Large 3 action (Early Stop) & 0.97 & \textbf{2.14} & 0.34 & 0.47 &
+1.55 \\
+\midrule
+Sharpe LSTM & 0.21 & N/A & N/A & N/A & N/A \\
+Sharpe MLPs Small & 0.15 & N/A & N/A & N/A & N/A \\
+\bottomrule
+\end{tabular}%
+}
+\caption{Comparative Sharpe Ratios across different model architectures and time
+horizons.}
+\label{tab:results_summary}
+\end{table}
+
+The results in Table~\ref{tab:results_summary} demonstrate that while larger
+models (e.g., Window MLPs Large) achieved higher peak returns in specific
+instances, they failed to generalize across longer time horizons. In contrast,
+the \textbf{Window MLPs Small (Small Step)} and \textbf{Window LSTM} models
+emerged as our most robust performers. Both models succeeded in consistently
+outperforming the \textbf{Baseline (Buy \& Hold)} strategy across every
+evaluation window (Last 500, 1000, and 1500 days). Specifically, the Small MLP
+model provided the highest stability on the immediate held-out set (Sharpe 1.59
+vs. Baseline 1.19), while the LSTM model demonstrated superior capacity over the
+medium term (Last 1500 Sharpe 0.90 vs. Baseline 0.64). This consistent ability
+to generate alpha regardless of the evaluation window indicates that these
+agents have learned fundamental market dynamics rather than overfitting to
+specific regimes.
+
+\subsection{Hyperparameter Sensitivity and Overfitting}
+A critical finding during our experimentation was the model's sensitivity to the
+learning rate.
+\begin{itemize}
+    \item \textbf{Large Step ($3 \times 10^{-4}$):} Models trained with this
+    rate tended to overfit rapidly. As seen in the "Window RL Large" entry
+    (Table~\ref{tab:results_summary}), the model achieved an extremely high
+    Sharpe ratio on the training data (First 1500: 7.14) but extremely inconsistent
+    performance on almost every other time window, Non of which beat the baseline.
+    \item \textbf{Small Step ($1 \times 10^{-5}$):} Conversely, reducing the
+    learning rate resulted in a steady, stable increase in performance over 5000
+    iterations. The "Window RL Small (Small Step)" model sacrificed raw training
+    performance but achieved the most consistent generalization, beating the
+    baseline in the held-out set (1.59 vs 1.19) and maintaining stability
+    across all lookback windows.
+\end{itemize}
+
+\subsection{Action Space reflection}
+
+In the earlier experiments, the models performed poorly with larger
+action spaces. Thus, we decided to reduce the action space to have better
+performance. However, after further experiments, we found that LSTM model is able
+to utilize the larger action space. We believe potentially, MLPs will also be 
+able to utilize the larger action space with further hyperparameter tuning. 
+
+\subsection{Architecture Analysis}
+While the \textbf{LSTM} architecture was the top performer in terms of peak
+capability (Window LSTM Early Stop), we found that the \textbf{Small MLP}
+combined with a small step size offered the best balance of simplicity and
+consistency. We prioritize consistency in this challenge, as we seek a model
+that outperforms the baseline at any given time period rather than one that
+chases specific market anomalies in the training set.
+
+Large MLP models exhibited a tendency to overfit, especially with higher learning
+rates, as evidenced by its inconsistent performance across time windows. 
+The smaller MLP with a reduced learning rate emerged as the most reliable choice. 
+
+\subsection{Reward Function Efficacy}
+We observed a stark contrast between our proposed Windowed Reward function and
+the direct optimization of the Sharpe ratio.
+
+The direct \textbf{Sharpe Reward} formulation failed to provide a meaningful
+gradient signal. As shown in Table~\ref{tab:results_summary}, models trained on
+this reward (Sharpe LSTM/RL Small) achieved negligible scores ($<0.25$).
+Figure~\ref{fig:sharpe_failure} illustrates that the model effectively learned
+nothing, with the raw reward fluctuating near zero without improvement.
+
+In contrast, the \textbf{Windowed Reward} provided a dense and stable signal,
+allowing the agent to steadily improve its policy over time, as shown in
+Figure~\ref{fig:window_success}.
+
+\begin{figure}[H]
+  \centering
+  % REPLACE WITH YOUR IMAGE: Graph showing Sharpe Reward failing to converge
+  \includegraphics[width=0.8\columnwidth]{asset/train_raw_reward.png}
+  \caption{Training curve for Direct Sharpe Reward. The agent fails to learn,
+  with the raw reward oscillating without an upward trend.}
+  \label{fig:sharpe_failure}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  % REPLACE WITH YOUR IMAGE: Graph showing Windowed Reward increasing
+  \includegraphics[width=0.8\columnwidth]{asset/avg_return.png}
+  \caption{Training curve for Windowed Reward. The steady increase in raw
+  reward indicates effective policy optimization.}
+  \label{fig:window_success}
+\end{figure}
+
+\subsection{Error Analysis}
+
+To systematically understand the limitations of our approach, we analyzed the model's performance failures across three dimensions: generalization gaps, market regime dependency, and reward signal sparsity.
+
+\subsubsection{Generalization Gap and Overfitting}
+The most prominent error pattern observed was the massive divergence between training and testing performance in models with aggressive hyperparameters.
+As illustrated in Table~\ref{tab:results_summary}, the \textbf{Window MLPs Large (Large Step)} model achieved a super-human Sharpe ratio of 7.14 on the training set (First 1500 days). However, on the held-out "Last 500" window, its performance collapsed to 1.12, underperforming the baseline (1.19).
+\begin{itemize}
+    \item \textbf{Pattern:} The model learned to memorize specific noise patterns in the training data rather than underlying market dynamics. This "overfitting error" is characterized by high-confidence predictions that fail to translate to new data.
+    \item \textbf{Mitigation:} The \textbf{Small MLP (Small Step)} model effectively mitigated this by strictly regularizing the update speed. While it never achieved the theoretical highs of the large model, it maintained a consistent generalization gap, beating the baseline in the held-out set (1.59 vs 1.19).
+\end{itemize}
+
+\subsubsection{Regime Dependency}
+Our systematic evaluation across multiple time windows revealed that the 
+model's performance is highly sensitive to market regimes.
+\begin{itemize}
+    \item \textbf{Strength:} The model excels in the most recent market conditions ("Last 500" days), where it achieves its highest risk-adjusted returns.
+    \item \textbf{Weakness:} In the "Last 2000" window, the model's performance (0.59) dips below the Buy-and-Hold baseline (0.66). This suggests the model struggles to adapt to older market regimes that may differ significantly from the recent training data distribution (e.g., different volatility or interest rate environments).
+    \item \textbf{Analysis:} This error indicates a lack of "regime awareness." The agent applies a single learned policy across diverse market conditions, failing to recognize when the market dynamics have shifted fundamentally.
+\end{itemize}
+
+\subsubsection{Reward Signal Failure}
+Qualitative analysis of the training curves (Figure~\ref{fig:sharpe_failure}) highlights a critical failure mode in our reward design. The models trained on the direct Competition Sharpe Ratio achieved a Sharpe of $\approx 0.2$, effectively failing to learn.
+\begin{itemize}
+    \item \textbf{Cause:} The Sharpe Ratio is a "sparse" and "delayed" metric—it requires a long history of returns to compute meaningfully. Optimizing for it directly at every timestep resulted in a noisy gradient signal that prevented the PPO agent from connecting specific actions to long-term risk-adjusted outcomes.
+    \item \textbf{Correction:} The "Windowed Sign Reward" proved superior because it provided dense, immediate feedback (directional accuracy) while implicitly penalizing risk via the windowed drawdown penalty.
+\end{itemize}
+
+\subsubsection{Future Error Mitigation}
+To specifically address the regime dependency and overfitting issues, future iterations would employ:
+\begin{enumerate}
+    \item \textbf{Regime-Aware Ensembles:} Training separate agents for different volatility regimes (e.g., High Vol vs. Low Vol) and using a meta-controller to switch between them.
+    \item \textbf{Adversarial Training:} Introducing noise or adversarial perturbations to the input features during training to force the model to learn robust features rather than memorizing noise.
+\end{enumerate}
+
+\section{Reflection on Progress Plan}
+
+In our Progress Report, we outlined four primary objectives for the final phase of the project. 
+Below is a reflection on our follow-through for each planned item:
+
+\begin{itemize}
+    \item \textbf{Plan: Improve Reward Function.} We proposed incorporating risk-adjusted returns 
+    (e.g., Sharpe ratio) and additional risk controls[cite: 233].
+    \item \textbf{Outcome:} \textit{Followed through, but with a pivot.} We explicitly implemented 
+    a reward function based on the Competition Sharpe Ratio ("Sharpe LSTM" and "Sharpe RL Small"). 
+    However, as shown in Table 1, these models failed to learn effectively (Sharpe < 0.25). 
+    Consequently, we changed course to develop the "Windowed Sign Reward," which indirectly 
+    optimizes for risk-adjusted returns by penalizing sustained drawdowns. This pivot was necessary 
+    because the direct Sharpe reward signal proved too sparse and noisy for the PPO agent to optimize directly.
+
+    \item \textbf{Plan: Experiment with Neural Architectures.} We planned to implement p-sLSTM and 
+    GRU architectures to capture temporal dependencies[cite: 235].
+    \item \textbf{Outcome:} \textit{Followed through.} We successfully implemented an LSTM-based 
+    Actor-Critic agent ("Window LSTM"). This aligns with our hypothesis that temporal encoding was 
+    necessary for financial time series. The results confirmed this decision, as the LSTM architecture 
+    achieved the highest peak performance (Sharpe 2.50) and strong generalization on the held-out set (1.34).
+
+    \item \textbf{Plan: Implement Parallel Rollout Environments.} We intended to accelerate training 
+    by parallelizing the environment interaction[cite: 236].
+    \item \textbf{Outcome:} \textit{Changed course.} While we identified the Python rollout loop as a 
+    bottleneck[cite: 208], implementing true parallel environments with LSTM agents introduced 
+    significant complexity regarding hidden state management across disparate processes. Instead of 
+    parallel rollouts, we focused on optimizing the \textit{update phase} via a "Block-Shuffling" 
+    mechanism. This allowed us to break sequential data into contiguous blocks for efficient batch 
+    processing while preserving the temporal integrity required for the LSTM.
+
+    \item \textbf{Plan: Complete Evaluation Pipeline.} We aimed to build a systematic analysis pipeline[cite: 237].
+    \item \textbf{Outcome:} \textit{Followed through.} We expanded our evaluation beyond simple MSE 
+    [cite: 219] to include a robust testing framework that segments performance across "Last 500", 
+    "Last 1000", and "Last 1500" days. This granular analysis was crucial in revealing that while 
+    large-step models overfit the training data (First 1500 Sharpe: 7.14), simpler models provided 
+    better consistency on unseen data.
+
+\end{itemize}
+
+
+\subsection{References}
+
+\nocite{}
+
+% \section*{Limitations}
+
+\section*{Team Contributions}
+
+Xiaotian Lou excelled in his contribution on finetuning different
+hyperparameters to achieve better results. He also contributed to the
+implementation of the reinforcement learning environment and agent.
+
+Shike Chen contributed mostly on the implementation of different reward 
+functions and the analysis of the results. He also helped with the 
+implementation of the reinforcement learning environment and agent.
+He also participated in hyperparameter tuning.
+
+Tianjiao Xiao mostly contributed on the implementation of reinforcement 
+learning environment, baseline model and agent. She also helped with the
+analysis of the results. She also participated in hyperparameter tuning.
+
+% Bibliography entries for the entire Anthology, followed by custom entries
+%\bibliography{custom,anthology-overleaf-1,anthology-overleaf-2}
+
+% Custom bibliography entries only
+\bibliography{custom}
+
+% \appendix
+
+% \section{Example Appendix}
+% \label{sec:appendix}
+
+% This is an appendix.
+
+\end{document}

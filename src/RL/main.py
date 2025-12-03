@@ -28,6 +28,10 @@ class TrainConfig:
     target_col: str = "forward_returns"
     feature_cols: Optional[List[str]] = None  # None => all except target
 
+    # Data Splitting
+    ignore_first_n: int = 3500       # Drop first N rows (warmup/burn-in)
+    test_size_m: int = 500          # Reserve last M rows for final testing
+
     # Device / env
     device: str = "cuda"          # "cuda" or "cpu"
     include_bias: bool = False
@@ -38,21 +42,21 @@ class TrainConfig:
     save_every: int = 250          # save model every N iterations
 
     # PPO / Training
-    iters: int = 1000
+    iters: int = 5000
     epochs: int = 5
     batch_size: int = 3000
     minibatch_size: int = 300
-    lr: float = 3e-4
-    clip_eps: float = 0.2
+    lr: float = 1e-4
+    clip_eps: float = 0.15
     gamma: float = 0.99
-    lam: float = 0.95
+    lam: float = 0.9
     entropy_coef: float = 0.01
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
     l2_lambda: float = 1e-4
 
     # Cross-validation / Eval
-    k_folds: int = 5
+    k_folds: int = 1
     eval_every: int = 100         # evaluate MSE/accuracy every N iterations
 
     # Plot saving (optional)
@@ -72,6 +76,10 @@ def parse_args() -> TrainConfig:
     p.add_argument("--data-path", type=str, default=default.data_path)
     p.add_argument("--target-col", type=str, default=default.target_col)
     p.add_argument("--feature-cols", type=str, nargs="*", default=None)
+    
+    # Split Params
+    p.add_argument("--ignore-first-n", type=int, default=default.ignore_first_n, help="Ignore first N rows")
+    p.add_argument("--test-size-m", type=int, default=default.test_size_m, help="Save last M rows for testing")
 
     # Device / env
     p.add_argument("--device", type=str, default=default.device, choices=["cuda", "cpu"])
@@ -187,7 +195,7 @@ def save_training_artifacts(
     run_cfg = {
         "ppo_config": asdict(ppo_cfg),
         "obs_dim": int(agent.model.shared[0].in_features),  # derived
-        "n_actions": 3,
+        "n_actions": 5,
         "device": str(agent.device),
         "include_bias": bool(cfg.include_bias),
         "threshold": float(cfg.threshold),
@@ -196,6 +204,10 @@ def save_training_artifacts(
         "columns_in_dataframe": list(df.columns),
         "data_path": str(cfg.data_path),
         "env_meta": extra or {},
+        "split_config": {
+            "ignore_first_n": cfg.ignore_first_n,
+            "test_size_m": cfg.test_size_m
+        }
     }
 
     with open(save_dir / "run_config.json", "w", encoding="utf-8") as f:
@@ -471,7 +483,34 @@ def main() -> None:
     print(f"Using device: {device} | Saving to: {save_dir}")
     print(f"Config: {cfg}")
 
-    df_raw, full_df, scaler = load_data(cfg)
+    df_raw, df_loaded, scaler = load_data(cfg)
+
+    # --- Manual Train/Test Split logic ---
+    total_len = len(df_loaded)
+    n = cfg.ignore_first_n
+    m = cfg.test_size_m
+    
+    if n < 0 or m < 0:
+        raise ValueError(f"ignore_first_n ({n}) and test_size_m ({m}) must be non-negative.")
+    if n + m >= total_len:
+        raise ValueError(f"Split invalid: n={n} + m={m} >= total_len={total_len}. No training data left.")
+
+    # Slice the active training/val portion
+    train_val_df = df_loaded.iloc[n : total_len - m].reset_index(drop=True)
+    df_raw_train = df_raw.iloc[n : total_len - m].reset_index(drop=True)
+
+    # Slice the holdout test portion
+    test_df = df_loaded.iloc[total_len - m :].reset_index(drop=True)
+
+    print(f"--- Data Split ---")
+    print(f"Total Rows:     {total_len}")
+    print(f"Ignored First:  {n}")
+    print(f"Train/Val Set:  {len(train_val_df)}")
+    print(f"Holdout Test:   {len(test_df)}")
+    print(f"------------------")
+
+    # Use train_val_df as the 'full_df' for the existing logic
+    full_df = train_val_df
 
     # ----- single run -----
     if cfg.k_folds <= 1:
@@ -485,7 +524,7 @@ def main() -> None:
         agent, _, hist = train_on_dataframe(
             cfg,
             full_df,
-            df_raw,
+            df_raw_train,
             fold_tag="FULL",
             eval_env=env_eval,
             scaler=scaler,
@@ -515,6 +554,9 @@ def main() -> None:
         print(f"[FULL] Final MSE={mse:.6f}  sign-acc={acc:.4f}")
         torch.save(agent.model.state_dict(), str(save_dir / "ppo_full.pt"))
         print(f"Saved weights: {save_dir / 'ppo_full.pt'}")
+        
+        # Determine which agent to use for final testing
+        final_test_agent = agent
 
         # Save run artifacts (config, scaler, feature order)
         save_training_artifacts(
@@ -527,96 +569,113 @@ def main() -> None:
             extra={"k_folds": cfg.k_folds, "iters": cfg.iters, "epochs": cfg.epochs},
         )
         print(f"Saved training artifacts: {save_dir / 'run_config.json'}, {save_dir / 'scaler.joblib'}")
-        return
 
-    # ---------- K-fold ----------
-    n = len(full_df)
-    folds = forward_chaining_folds(n, cfg.k_folds)
-    mses: List[float] = []
-    accs: List[float] = []
-    last_agent: Optional[PPOAgent] = None
+    else:
+        # ---------- K-fold ----------
+        n_cv = len(full_df)
+        folds = forward_chaining_folds(n_cv, cfg.k_folds)
+        mses: List[float] = []
+        accs: List[float] = []
+        last_agent: Optional[PPOAgent] = None
 
-    for fold_id, (tr, va) in enumerate(folds, start=1):
-        df_tr = full_df.iloc[tr].reset_index(drop=True)
-        df_va = full_df.iloc[va].reset_index(drop=True)
+        for fold_id, (tr, va) in enumerate(folds, start=1):
+            df_tr = full_df.iloc[tr].reset_index(drop=True)
+            df_va = full_df.iloc[va].reset_index(drop=True)
 
-        env_eval = Environment(
-            df_va,
-            "target",
-            cfg.feature_cols,
-            reward=WindowedSignReward_v2(threshold=cfg.threshold,),
-            include_bias=cfg.include_bias,
-        )
-        agent, _, hist = train_on_dataframe(
-            cfg,
-            df_tr,
-            df_raw,
-            fold_tag=f"FOLD_{fold_id}",
-            eval_env=env_eval,
-            scaler=scaler,
-        )
-
-        # Save CSV curves per fold
-        train_csv, eval_csv = save_curves_csv(save_dir, base_name=f"fold{fold_id}", hist=hist)
-        print(f"[FOLD {fold_id}] Saved training curves: {train_csv}")
-        if eval_csv is not None:
-            print(f"[FOLD {fold_id}] Saved eval curves: {eval_csv}")
-
-        # Optional plots
-        if cfg.save_plots:
-            plot_series(
-                cfg,
-                hist["policy_loss"],
-                f"Policy Loss (Fold {fold_id})",
-                save_name=f"policy_loss_fold{fold_id}.png",
+            env_eval = Environment(
+                df_va,
+                "target",
+                cfg.feature_cols,
+                reward=WindowedSignReward_v2(threshold=cfg.threshold,),
+                include_bias=cfg.include_bias,
             )
-            plot_series(
+            agent, _, hist = train_on_dataframe(
                 cfg,
-                hist["value_loss"],
-                f"Value Loss (Fold {fold_id})",
-                save_name=f"value_loss_fold{fold_id}.png",
+                df_tr,
+                df_raw_train,
+                fold_tag=f"FOLD_{fold_id}",
+                eval_env=env_eval,
+                scaler=scaler,
             )
-            plot_series(
-                cfg,
-                hist["avg_return"],
-                f"Average Return (Fold {fold_id})",
-                save_name=f"avg_return_fold{fold_id}.png",
-            )
-            if hist["mse_eval"]:
+
+            # Save CSV curves per fold
+            train_csv, eval_csv = save_curves_csv(save_dir, base_name=f"fold{fold_id}", hist=hist)
+            print(f"[FOLD {fold_id}] Saved training curves: {train_csv}")
+            if eval_csv is not None:
+                print(f"[FOLD {fold_id}] Saved eval curves: {eval_csv}")
+
+            # Optional plots
+            if cfg.save_plots:
                 plot_series(
                     cfg,
-                    hist["mse_eval"],
-                    f"Eval MSE (Fold {fold_id})",
-                    x=hist["iter_eval"],
-                    save_name=f"mse_eval_fold{fold_id}.png",
+                    hist["policy_loss"],
+                    f"Policy Loss (Fold {fold_id})",
+                    save_name=f"policy_loss_fold{fold_id}.png",
                 )
+                plot_series(
+                    cfg,
+                    hist["value_loss"],
+                    f"Value Loss (Fold {fold_id})",
+                    save_name=f"value_loss_fold{fold_id}.png",
+                )
+                plot_series(
+                    cfg,
+                    hist["avg_return"],
+                    f"Average Return (Fold {fold_id})",
+                    save_name=f"avg_return_fold{fold_id}.png",
+                )
+                if hist["mse_eval"]:
+                    plot_series(
+                        cfg,
+                        hist["mse_eval"],
+                        f"Eval MSE (Fold {fold_id})",
+                        x=hist["iter_eval"],
+                        save_name=f"mse_eval_fold{fold_id}.png",
+                    )
 
-        mse, acc = evaluate_mse(env_eval, agent, scaler)
-        mses.append(mse)
-        accs.append(acc)
-        print(f"[FOLD {fold_id}] Final val MSE={mse:.6f}  sign-acc={acc:.4f}  (n={len(df_va)})")
+            mse, acc = evaluate_mse(env_eval, agent, scaler)
+            mses.append(mse)
+            accs.append(acc)
+            print(f"[FOLD {fold_id}] Final val MSE={mse:.6f}  sign-acc={acc:.4f}  (n={len(df_va)})")
 
-        out_path = Path(cfg.save_dir) / f"ppo_fold{fold_id}.pt"
-        torch.save(agent.model.state_dict(), str(out_path))
-        print(f"Saved weights: {out_path}")
-        last_agent = agent
+            out_path = Path(cfg.save_dir) / f"ppo_fold{fold_id}.pt"
+            torch.save(agent.model.state_dict(), str(out_path))
+            print(f"Saved weights: {out_path}")
+            last_agent = agent
 
-    print(f"[CV] mean MSE={np.mean(mses):.6f}  std={np.std(mses):.6f} | mean sign-acc={np.mean(accs):.4f}")
-    torch.save(last_agent.model.state_dict(), str(Path(cfg.save_dir) / "ppo_full.pt"))
-    print(f"Saved weights: {Path(cfg.save_dir) / 'ppo_full.pt'}")
+        print(f"[CV] mean MSE={np.mean(mses):.6f}  std={np.std(mses):.6f} | mean sign-acc={np.mean(accs):.4f}")
+        torch.save(last_agent.model.state_dict(), str(Path(cfg.save_dir) / "ppo_full.pt"))
+        print(f"Saved weights: {Path(cfg.save_dir) / 'ppo_full.pt'}")
+        
+        final_test_agent = last_agent
 
-    # Save run artifacts
-    save_training_artifacts(
-        cfg=cfg,
-        save_dir=Path(cfg.save_dir),
-        agent=last_agent,
-        ppo_cfg=last_agent.cfg,
-        scaler=scaler,
-        df=full_df,
-        extra={"k_folds": cfg.k_folds, "iters": cfg.iters, "epochs": cfg.epochs},
-    )
-    print(f"Saved training artifacts: {Path(cfg.save_dir) / 'run_config.json'}, {Path(cfg.save_dir) / 'scaler.joblib'}")
+        # Save run artifacts
+        save_training_artifacts(
+            cfg=cfg,
+            save_dir=Path(cfg.save_dir),
+            agent=last_agent,
+            ppo_cfg=last_agent.cfg,
+            scaler=scaler,
+            df=full_df,
+            extra={"k_folds": cfg.k_folds, "iters": cfg.iters, "epochs": cfg.epochs},
+        )
+        print(f"Saved training artifacts: {Path(cfg.save_dir) / 'run_config.json'}, {Path(cfg.save_dir) / 'scaler.joblib'}")
 
+    # --- Final Holdout Test ---
+    if len(test_df) > 0 and final_test_agent is not None:
+        print("\n===========================================")
+        print(" RUNNING FINAL EVALUATION ON HOLDOUT TEST ")
+        print("===========================================")
+        env_test = Environment(
+            test_df, 
+            "target", 
+            cfg.feature_cols, 
+            reward=SimpleSignReward(cfg.threshold), 
+            include_bias=cfg.include_bias
+        )
+        mse_test, acc_test = evaluate_mse(env_test, final_test_agent, scaler)
+        print(f"[TEST SET result] MSE={mse_test:.6f} | sign-acc={acc_test:.4f}")
+        print("===========================================\n")
 
 if __name__ == "__main__":
     main()
