@@ -62,27 +62,29 @@ returns with rigorous risk control to maximize this specific performance metric.
 
 \section{Related Work}
 
-Financial trading is increasingly viewed as a sequential decision-making problem 
-rather than a supervised regression task. (Zhang2020) argue that Reinforcement 
-Learning (RL) offers a superior framework by bypassing explicit forecasting to 
-optimize trade positions directly, thereby navigating the low signal-to-noise 
-ratio of financial data. Among RL methods, Proximal Policy Optimisation (PPO) 
-(Schulman2017) is particularly effective; its clipped surrogate objective stabilizes
- updates in non-stationary, noisy market environments.
+Predicting stock prices is effectively modeled as a sequential 
+decision-making problem rather than a static regression task. Zhang et al. 
+[1] argue that Reinforcement Learning (RL) offers a superior framework by 
+bypassing explicit forecasting to optimize trade positions directly, thereby 
+navigating the low signal-to-noise ratio of financial data. Among these 
+methods, Proximal Policy Optimization (PPO) [2] is particularly effective 
+due to its ability to stabilize policy updates in non-stationary, 
+noisy market environments.
 
-Recent literature highlights the versatility of RL in quantitative finance (Sun2023). 
-Studies have successfully applied Deep RL to adaptive ensemble strategies (Yang2020) 
-and complex portfolio allocations involving short-selling (Huang2020). 
-To capture asset inter-dependencies and dynamic market complexity, researchers 
-have also introduced graph-convolutional architectures (Soleymani2021) and model-free 
-frameworks (Jiang2024).
+Recent literature highlights the versatility of RL in quantitative finance 
+[3]. Huang et al. [4] successfully applied Deep RL to portfolio allocation 
+with complex action spaces, while Soleymani and Paquet [5] introduced 
+graph-convolutional architectures to capture asset inter-dependencies. 
+Furthermore, Jiang et al. [6] proposed model-free frameworks to address 
+dynamic market complexities in large-scale settings.
 
-However, training requires robust reward functions that account for tail risk. 
-(Zakamouline2009) demonstrate that standard mean-variance metrics often fail to 
-capture higher moments like skewness and kurtosis. They propose the Generalized 
-Sharpe Ratio (GSR), grounded in Expected Utility Theory, as a more reliable 
-performance measure. Consequently, integrating PPO with risk-adjusted metrics 
-like GSR offers a promising direction for robust trading-policy development.
+However, a critical challenge lies in defining reward functions that account
+ for tail risk. Zakamouline and Koekebakker [7] demonstrate that standard 
+ mean-variance metrics fail to capture higher moments like skewness and 
+ kurtosis, proposing the Generalized Sharpe Ratio (GSR) as a more robust 
+ measure. Complementing this, Lam et al. [8] emphasize the importance of 
+ integrating coherent risk measures directly into RL approximation to ensure 
+ robustness against worst-case scenarios.
 
 \section{Dataset}
 There is no significant change in the final dataset compared to the progress
@@ -635,78 +637,33 @@ Tianjiao Xiao mostly contributed on the implementation of reinforcement
 learning environment, baseline model and agent. She also helped with the
 analysis of the results. She also participated in hyperparameter tuning.
 
-\section{References}
-@article{Schulman2017,
-  title     = {Proximal Policy Optimization Algorithms},
-  author    = {Schulman, John and Wolski, Filip and Dhariwal, Prafulla and Radford, Alec and Klimov, Oleg},
-  journal   = {arXiv preprint arXiv:1707.06347},
-  year      = {2017},
-  url       = {https://arxiv.org/abs/1707.06347}
-}
+% Manual Bibliography
+\begin{thebibliography}{8}
 
-@article{Huang2020,
-  title     = {Deep Reinforcement Learning for Portfolio Management},
-  author    = {Huang, Gang and Zhou, Xin and Song, Qing},
-  journal   = {arXiv preprint arXiv:2012.13773},
-  year      = {2020},
-  url       = {https://arxiv.org/abs/2012.13773}
-}
+\bibitem{Zhang2020}
+Z. Zhang, S. Zohren, and S. Roberts, ``Deep reinforcement learning for trading,'' \textit{The Journal of Financial Data Science}, vol. 2, no. 2, pp. 25--40, 2020.
 
-@article{Jiang2024,
-  title     = {Deep Reinforcement Learning for Portfolio Selection},
-  author    = {Jiang, Yifan and He, Xiang and Zhang, Wei},
-  journal   = {Decision Support Systems},
-  year      = {2024},
-  note      = {In press},
-  url       = {https://www.sciencedirect.com/science/article/pii/S1044028324000887}
-}
+\bibitem{Schulman2017}
+J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, ``Proximal Policy Optimization Algorithms,'' \textit{arXiv preprint arXiv:1707.06347}, 2017.
 
-@inproceedings{Lam2023,
-  title     = {Risk-Aware Reinforcement Learning with Coherent Risk Measures and Non-Linear Function Approximation},
-  author    = {Lam, Tze Siang and Verma, Abhinav and Low, Bryan Kian Hsiang and Jaillet, Patrick},
-  booktitle = {Proceedings of the International Conference on Learning Representations (ICLR)},
-  year      = {2023},
-  url       = {https://www.mit.edu/~jaillet/general/iclr23b.pdf}
-}
+\bibitem{Sun2023}
+S. Sun, R. Wang, and B. An, ``Reinforcement learning for quantitative trading,'' \textit{ACM Transactions on Intelligent Systems and Technology}, vol. 14, no. 3, pp. 1--29, 2023.
 
-@article{Soleymani2021,
-  title     = {Deep Graph Convolutional Reinforcement Learning for Financial Portfolio Management: DeepPocket},
-  author    = {Soleymani, Farzan and Paquet, Eric},
-  journal   = {arXiv preprint arXiv:2105.08664},
-  year      = {2021},
-  url       = {https://arxiv.org/abs/2105.08664}
-}
+\bibitem{Huang2020}
+G. Huang, X. Zhou, and Q. Song, ``Deep Reinforcement Learning for Portfolio Management,'' \textit{arXiv preprint arXiv:2012.13773}, 2020.
 
-@article{Zhang2020,
-  title={Deep reinforcement learning for trading},
-  author={Zhang, Zihao and Zohren, Stefan and Roberts, Stephen},
-  journal={The Journal of Financial Data Science},
-  volume={2},
-  number={2},
-  pages={25--40},
-  year={2020},
-  publisher={PMR}
-}
+\bibitem{Soleymani2021}
+F. Soleymani and E. Paquet, ``Deep Graph Convolutional Reinforcement Learning for Financial Portfolio Management: DeepPocket,'' \textit{arXiv preprint arXiv:2105.08664}, 2021.
 
-@article{Sun2023,
-  title={Reinforcement learning for quantitative trading},
-  author={Sun, Shuo and Wang, Rundong and An, Bo},
-  journal={ACM Transactions on Intelligent Systems and Technology},
-  volume={14},
-  number={3},
-  pages={1--29},
-  year={2023},
-  publisher={ACM New York, NY, USA}
-}
+\bibitem{Jiang2024}
+Y. Jiang, X. He, and W. Zhang, ``Deep Reinforcement Learning for Portfolio Selection,'' \textit{Decision Support Systems}, 2024. [In press].
 
-@article{Zakamouline2009,
-  title={Portfolio performance evaluation with generalized Sharpe ratios: Beyond the mean and variance},
-  author={Zakamouline, Valeri and Koekebakker, Steen},
-  journal={Journal of Banking \& Finance},
-  volume={33},
-  number={7},
-  pages={1242--1254},
-  year={2009},
-  publisher={Elsevier}
-}
+\bibitem{Zakamouline2009}
+V. Zakamouline and S. Koekebakker, ``Portfolio performance evaluation with generalized Sharpe ratios: Beyond the mean and variance,'' \textit{Journal of Banking \& Finance}, vol. 33, no. 7, pp. 1242--1254, 2009.
+
+\bibitem{Lam2023}
+T. S. Lam, A. Verma, B. K. H. Low, and P. Jaillet, ``Risk-Aware Reinforcement Learning with Coherent Risk Measures and Non-Linear Function Approximation,'' in \textit{Proc. ICLR}, 2023.
+
+\end{thebibliography}
+
 \end{document}
