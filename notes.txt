@@ -1,14 +1,16 @@
+
 date_id - An identifier for a single trading day.
-M* - Market Dynamics/Technical features.
+M* - Market Dynamics/Technical features. 
 E* - Macro Economic features.
 I* - Interest Rate features.
 P* - Price/Valuation features.
 V* - Volatility features.
-S* - Sentiment features.
+S* - Sentiment features. 
 MOM* - Momentum features.
 D* - Dummy/Binary features.
+
 forward_returns - The returns from buying the S&P 500 
-and selling it a day later. Train set only.
+and selling it a day later. Train set only. (target)
 
 risk_free_rate - The federal funds rate. Train set only.
 
@@ -17,7 +19,22 @@ market_forward_excess_returns - Forward returns relative to expectations.
  the result using a median absolute deviation (MAD) with 
  a criterion of 4. Train set only.
 
-
-
 dummy features have significant bias
+
+output1: whether tmr SP500 will move over 1%
+
+output2: how much SP500 will move tmr 
+
+output3: prediction_confidence
+
+
+because the complexity/noisyness of the dataset, the weak relationships observed between the target and the training data
+also because we do not know what is behind each features and its preprocess, 
+it is very hard for us to make any meaningful hypothesis
+so we prefer unsuperized learning methods
+
+
+
+
+
 
